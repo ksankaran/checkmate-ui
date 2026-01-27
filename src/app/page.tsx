@@ -43,6 +43,7 @@ export default function HomePage() {
 
   useEffect(() => {
     fetchProjects();
+    fetchStats();
   }, []);
 
   async function fetchProjects() {
@@ -51,12 +52,28 @@ export default function HomePage() {
       if (res.ok) {
         const data = await res.json();
         setProjects(data);
-        setStats((prev) => ({ ...prev, totalProjects: data.length }));
       }
     } catch (error) {
       console.error("Failed to fetch projects:", error);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function fetchStats() {
+    try {
+      const res = await fetch(`${API_URL}/api/projects/stats`);
+      if (res.ok) {
+        const data = await res.json();
+        setStats({
+          totalProjects: data.total_projects,
+          totalTestCases: data.total_test_cases,
+          recentRuns: data.recent_runs,
+          passRate: data.pass_rate,
+        });
+      }
+    } catch (error) {
+      console.error("Failed to fetch stats:", error);
     }
   }
 
