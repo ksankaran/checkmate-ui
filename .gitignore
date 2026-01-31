@@ -23,3 +23,4 @@ out/
 *.log
 *.tsbuildinfo
 next-env.d.ts
+CLAUDE.md
