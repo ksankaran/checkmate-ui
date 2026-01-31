@@ -14,10 +14,11 @@ import {
   Clock,
   History,
   ChevronDown,
+  RefreshCw,
 } from "lucide-react";
 import { ThemeToggle } from "@/components/dashboard/ThemeToggle";
 import { cn } from "@/lib/utils";
-import { API_URL } from "@/lib/api";
+import { API_URL, getFeatures, Features } from "@/lib/api";
 
 interface TestStep {
   action: string;
@@ -85,11 +86,29 @@ export default function TestCaseDetailPage() {
   const [browsers, setBrowsers] = useState<Browser[]>([]);
   const [selectedBrowser, setSelectedBrowser] = useState<string | null>(null);
 
+  // Retry configuration
+  const [features, setFeatures] = useState<Features>({ intelligent_retry: false });
+  const [retryEnabled, setRetryEnabled] = useState(false);
+  const [maxRetries, setMaxRetries] = useState(2);
+  const [retryMode, setRetryMode] = useState<"simple" | "intelligent">("simple");
+
+  // Run options dropdown
+  const [showRunOptions, setShowRunOptions] = useState(false);
+
   useEffect(() => {
     fetchTestCase();
     fetchProject();
     fetchBrowsers();
+    fetchFeatures();
   }, [projectId, testCaseId]);
+
+  async function fetchFeatures() {
+    const f = await getFeatures();
+    setFeatures(f);
+    if (f.intelligent_retry) {
+      setRetryMode("intelligent");
+    }
+  }
 
   async function fetchTestCase() {
     try {
@@ -308,31 +327,109 @@ export default function TestCaseDetailPage() {
               <h2 className="text-xl font-bold mb-2">{testCase.name}</h2>
               <p className="text-muted-foreground">{testCase.natural_query}</p>
             </div>
-            <div className="flex items-center gap-2">
-              {/* Browser selector */}
-              {browsers.length > 0 && (
-                <div className="relative">
-                  <select
-                    value={selectedBrowser || ""}
-                    onChange={(e) => setSelectedBrowser(e.target.value)}
-                    className="appearance-none px-3 py-2 pr-8 rounded-lg border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
-                  >
-                    {browsers.map((browser) => (
-                      <option key={browser.id} value={browser.id}>
-                        {browser.name}
-                      </option>
-                    ))}
-                  </select>
-                  <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 h-4 w-4 pointer-events-none text-muted-foreground" />
-                </div>
-              )}
+            <div className="relative flex items-center">
+              {/* Run button with dropdown */}
               <Link
-                href={`/projects/${projectId}/test-cases/${testCaseId}/runs?autorun=true${selectedBrowser ? `&browser=${selectedBrowser}` : ''}`}
-                className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors"
+                href={`/projects/${projectId}/test-cases/${testCaseId}/runs?autorun=true${selectedBrowser ? `&browser=${selectedBrowser}` : ''}${retryEnabled ? `&retry=true&maxRetries=${maxRetries}&retryMode=${retryMode}` : ''}`}
+                className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-l-lg hover:bg-primary/90 transition-colors"
               >
                 <Play className="h-4 w-4" />
                 Run Test
               </Link>
+              <button
+                onClick={() => setShowRunOptions(!showRunOptions)}
+                className="px-2 bg-primary text-primary-foreground rounded-r-lg border-l border-primary-foreground/20 hover:bg-primary/90 transition-colors self-stretch flex items-center"
+              >
+                <ChevronDown className={cn("h-4 w-4 transition-transform", showRunOptions && "rotate-180")} />
+              </button>
+
+              {/* Dropdown menu */}
+              {showRunOptions && (
+                <>
+                  <div
+                    className="fixed inset-0 z-40"
+                    onClick={() => setShowRunOptions(false)}
+                  />
+                  <motion.div
+                    initial={{ opacity: 0, y: -10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="absolute right-0 top-full mt-2 w-64 rounded-lg border border-border bg-card shadow-lg z-50 p-3 space-y-3"
+                  >
+                    {/* Browser selector */}
+                    {browsers.length > 0 && (
+                      <div>
+                        <label className="text-xs font-medium text-muted-foreground mb-1.5 block">Browser</label>
+                        <div className="relative">
+                          <select
+                            value={selectedBrowser || ""}
+                            onChange={(e) => setSelectedBrowser(e.target.value)}
+                            className="w-full appearance-none px-3 py-2 pr-8 rounded-lg border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
+                          >
+                            {browsers.map((browser) => (
+                              <option key={browser.id} value={browser.id}>
+                                {browser.name}
+                              </option>
+                            ))}
+                          </select>
+                          <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 h-4 w-4 pointer-events-none text-muted-foreground" />
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="border-t border-border pt-3">
+                      {/* Retry toggle */}
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={retryEnabled}
+                          onChange={(e) => setRetryEnabled(e.target.checked)}
+                          className="rounded border-border"
+                        />
+                        <RefreshCw className="h-3.5 w-3.5 text-muted-foreground" />
+                        <span className="text-sm">Enable retry on failure</span>
+                      </label>
+
+                      {/* Retry options */}
+                      {retryEnabled && (
+                        <div className="mt-3 pl-6 space-y-2">
+                          <div>
+                            <label className="text-xs font-medium text-muted-foreground mb-1 block">Max retries</label>
+                            <div className="relative">
+                              <select
+                                value={maxRetries}
+                                onChange={(e) => setMaxRetries(parseInt(e.target.value))}
+                                className="w-full appearance-none px-3 py-1.5 pr-8 rounded border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
+                              >
+                                <option value={1}>1 retry</option>
+                                <option value={2}>2 retries</option>
+                                <option value={3}>3 retries</option>
+                              </select>
+                              <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 h-3 w-3 pointer-events-none text-muted-foreground" />
+                            </div>
+                          </div>
+
+                          {features.intelligent_retry && (
+                            <div>
+                              <label className="text-xs font-medium text-muted-foreground mb-1 block">Retry mode</label>
+                              <div className="relative">
+                                <select
+                                  value={retryMode}
+                                  onChange={(e) => setRetryMode(e.target.value as "simple" | "intelligent")}
+                                  className="w-full appearance-none px-3 py-1.5 pr-8 rounded border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
+                                >
+                                  <option value="simple">Simple</option>
+                                  <option value="intelligent">Smart (AI)</option>
+                                </select>
+                                <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 h-3 w-3 pointer-events-none text-muted-foreground" />
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </motion.div>
+                </>
+              )}
             </div>
           </div>
 

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { useParams, useSearchParams } from "next/navigation";
+import { useParams, useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -13,10 +13,12 @@ import {
   ChevronDown,
   ChevronRight,
   Loader2,
+  RefreshCw,
+  AlertCircle,
 } from "lucide-react";
 import { ThemeToggle } from "@/components/dashboard/ThemeToggle";
 import { cn } from "@/lib/utils";
-import { API_URL } from "@/lib/api";
+import { API_URL, getFeatures, Features } from "@/lib/api";
 
 interface TestStep {
   action: string;
@@ -44,6 +46,8 @@ interface RunStep {
   duration: number | null;
   error: string | null;
   screenshot: string | null;
+  attempt?: number;
+  max_attempts?: number;
 }
 
 interface TestRun {
@@ -59,6 +63,57 @@ interface TestRun {
   pass_count: number;
   created_at: string;
   steps: RunStep[];
+  // Retry tracking
+  retry_attempt: number;
+  max_retries: number;
+  original_run_id: number | null;
+  retry_mode: string | null;
+  retry_reason: string | null;
+}
+
+// Grouped run with its retries
+interface RunGroup {
+  original: TestRun;
+  retries: TestRun[];
+  isExpanded: boolean;
+}
+
+// Group runs by original_run_id
+function groupRuns(runs: TestRun[]): RunGroup[] {
+  const groups: Map<number, RunGroup> = new Map();
+  const retryRuns: TestRun[] = [];
+
+  // First pass: identify original runs and retries
+  for (const run of runs) {
+    if (run.original_run_id === null) {
+      // This is an original run
+      groups.set(run.id, { original: run, retries: [], isExpanded: false });
+    } else {
+      // This is a retry
+      retryRuns.push(run);
+    }
+  }
+
+  // Second pass: attach retries to their original runs
+  for (const retry of retryRuns) {
+    const group = groups.get(retry.original_run_id!);
+    if (group) {
+      group.retries.push(retry);
+    } else {
+      // Orphan retry (original run not in list) - treat as standalone
+      groups.set(retry.id, { original: retry, retries: [], isExpanded: false });
+    }
+  }
+
+  // Sort retries within each group by retry_attempt
+  for (const group of groups.values()) {
+    group.retries.sort((a, b) => a.retry_attempt - b.retry_attempt);
+  }
+
+  // Return groups sorted by original run's created_at (newest first)
+  return Array.from(groups.values()).sort(
+    (a, b) => new Date(b.original.created_at).getTime() - new Date(a.original.created_at).getTime()
+  );
 }
 
 interface Browser {
@@ -90,11 +145,17 @@ const ACTION_LABELS: Record<string, string> = {
 export default function TestCaseRunsPage() {
   const params = useParams();
   const searchParams = useSearchParams();
+  const router = useRouter();
   const projectId = params.id as string;
   const testCaseId = params.testCaseId as string;
   const autorun = searchParams.get("autorun") === "true";
   const browserFromUrl = searchParams.get("browser");
+  const retryFromUrl = searchParams.get("retry") === "true";
+  const maxRetriesFromUrl = parseInt(searchParams.get("maxRetries") || "2");
+  const retryModeFromUrl = (searchParams.get("retryMode") as "simple" | "intelligent") || "simple";
+  const runIdFromUrl = searchParams.get("runId");
   const hasAutoRun = useRef(false);
+  const hasScrolledToRun = useRef(false);
 
   const [testCase, setTestCase] = useState<TestCase | null>(null);
   const [runs, setRuns] = useState<TestRun[]>([]);
@@ -108,16 +169,43 @@ export default function TestCaseRunsPage() {
   const [browsers, setBrowsers] = useState<Browser[]>([]);
   const [selectedBrowser, setSelectedBrowser] = useState<string | null>(null);
 
+  // Retry configuration (initialize from URL params if present)
+  const [features, setFeatures] = useState<Features>({ intelligent_retry: false });
+  const [retryEnabled, setRetryEnabled] = useState(retryFromUrl);
+  const [maxRetries, setMaxRetries] = useState(maxRetriesFromUrl);
+  const [retryMode, setRetryMode] = useState<"simple" | "intelligent">(retryModeFromUrl);
+
+  // Retry status tracking
+  const [retryStatus, setRetryStatus] = useState<string | null>(null);
+
+  // Track which run groups have their retries expanded
+  const [expandedRetryGroups, setExpandedRetryGroups] = useState<Set<number>>(new Set());
+
+  // Compute grouped runs
+  const runGroups = groupRuns(runs);
+
   useEffect(() => {
     fetchTestCase();
     fetchRuns();
     fetchBrowsers();
+    fetchFeatures();
   }, [testCaseId]);
+
+  async function fetchFeatures() {
+    const f = await getFeatures();
+    setFeatures(f);
+    // Default to intelligent mode if available
+    if (f.intelligent_retry) {
+      setRetryMode("intelligent");
+    }
+  }
 
   // Auto-run when navigating with ?autorun=true
   useEffect(() => {
     if (autorun && !loading && testCase && !hasAutoRun.current && !isRunning) {
       hasAutoRun.current = true;
+      // Clear URL params to prevent re-run on refresh
+      router.replace(`/projects/${projectId}/test-cases/${testCaseId}/runs`, { scroll: false });
       handleRunTest();
     }
   }, [autorun, loading, testCase]);
@@ -140,9 +228,15 @@ export default function TestCaseRunsPage() {
       if (res.ok) {
         const data = await res.json();
         setRuns(data);
-        // Auto-expand the latest run
-        if (data.length > 0) {
-          setExpandedRuns(new Set([data[0].id]));
+        // Expand specified run from URL, or latest run
+        const targetRunId = runIdFromUrl ? parseInt(runIdFromUrl) : (data.length > 0 ? data[0].id : null);
+        if (targetRunId) {
+          setExpandedRuns(new Set([targetRunId]));
+          // Also expand the retry group if this run is part of one
+          const targetRun = data.find((r: TestRun) => r.id === targetRunId);
+          if (targetRun?.original_run_id) {
+            setExpandedRetryGroups(new Set([targetRun.original_run_id]));
+          }
         }
       }
     } catch (error) {
@@ -151,6 +245,20 @@ export default function TestCaseRunsPage() {
       setLoading(false);
     }
   }
+
+  // Scroll to specified run after loading
+  useEffect(() => {
+    if (!loading && runIdFromUrl && !hasScrolledToRun.current) {
+      hasScrolledToRun.current = true;
+      // Small delay to let the DOM render
+      setTimeout(() => {
+        const runElement = document.getElementById(`run-${runIdFromUrl}`);
+        if (runElement) {
+          runElement.scrollIntoView({ behavior: "smooth", block: "center" });
+        }
+      }, 100);
+    }
+  }, [loading, runIdFromUrl]);
 
   async function fetchBrowsers() {
     try {
@@ -175,11 +283,25 @@ export default function TestCaseRunsPage() {
   async function handleRunTest() {
     setIsRunning(true);
     setVisibleStepIndex(-1);
+    setRetryStatus(null);
 
     // Track steps as they complete for building the run object
     const completedSteps: RunStep[] = [];
     let runId: number | null = null;
     let totalSteps = 0;
+
+    // Build request body with retry config
+    const requestBody: {
+      browser?: string | null;
+      retry?: { max_retries: number; retry_mode: string };
+    } = { browser: selectedBrowser };
+
+    if (retryEnabled && maxRetries > 0) {
+      requestBody.retry = {
+        max_retries: maxRetries,
+        retry_mode: retryMode,
+      };
+    }
 
     try {
       const response = await fetch(
@@ -187,7 +309,7 @@ export default function TestCaseRunsPage() {
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ browser: selectedBrowser }),
+          body: JSON.stringify(requestBody),
         }
       );
 
@@ -239,15 +361,25 @@ export default function TestCaseRunsPage() {
                     pass_count: 0,
                     created_at: new Date().toISOString(),
                     steps: [],
+                    // Retry tracking
+                    retry_attempt: data.retry_attempt || 0,
+                    max_retries: data.max_retries || 0,
+                    original_run_id: data.original_run_id || null,
+                    retry_mode: null,
+                    retry_reason: null,
                   };
                   setRuns((prev) => [placeholderRun, ...prev]);
                   setExpandedRuns(new Set([data.run_id]));
                   setAnimatingRunId(data.run_id);
+                  // Auto-expand retry group when new retry run starts
+                  if (data.original_run_id) {
+                    setExpandedRetryGroups((prev) => new Set([...prev, data.original_run_id]));
+                  }
                   break;
 
                 case "step_started":
                   setVisibleStepIndex(data.step_number - 1);
-                  // Add placeholder step
+                  // Add or update placeholder step (handles retries)
                   const placeholderStep: RunStep = {
                     id: data.step_number,
                     step_number: data.step_number,
@@ -258,14 +390,22 @@ export default function TestCaseRunsPage() {
                     duration: null,
                     error: null,
                     screenshot: null,
+                    attempt: data.attempt,
+                    max_attempts: data.max_attempts,
                   };
                   setRuns((prev) => {
                     const updated = [...prev];
                     if (updated[0] && updated[0].id === runId) {
-                      updated[0] = {
-                        ...updated[0],
-                        steps: [...updated[0].steps, placeholderStep],
-                      };
+                      const steps = [...updated[0].steps];
+                      const existingIdx = steps.findIndex(s => s.step_number === data.step_number);
+                      if (existingIdx >= 0) {
+                        // Update existing step (retry case)
+                        steps[existingIdx] = placeholderStep;
+                      } else {
+                        // Add new step
+                        steps.push(placeholderStep);
+                      }
+                      updated[0] = { ...updated[0], steps };
                     }
                     return updated;
                   });
@@ -282,6 +422,8 @@ export default function TestCaseRunsPage() {
                     duration: data.duration,
                     error: data.error,
                     screenshot: data.screenshot || null,
+                    attempt: data.attempt,
+                    max_attempts: data.max_attempts,
                   };
                   completedSteps.push(completedStep);
                   // Update the step status
@@ -297,28 +439,52 @@ export default function TestCaseRunsPage() {
                   break;
 
                 case "run_completed":
-                  // Update with final run state
+                  // Update with final run state - find by ID since retries may have added new runs
                   setRuns((prev) => {
-                    const updated = [...prev];
-                    if (updated[0] && updated[0].id === runId) {
-                      updated[0] = {
-                        ...updated[0],
-                        status: data.status,
-                        pass_count: data.pass_count,
-                        error_count: data.error_count,
-                        summary: data.summary,
-                        completed_at: new Date().toISOString(),
-                      };
-                    }
-                    return updated;
+                    return prev.map((run) => {
+                      if (run.id === data.run_id) {
+                        return {
+                          ...run,
+                          status: data.status,
+                          pass_count: data.pass_count,
+                          error_count: data.error_count,
+                          summary: data.summary,
+                          completed_at: new Date().toISOString(),
+                        };
+                      }
+                      return run;
+                    });
                   });
-                  setAnimatingRunId(null);
+                  // Only clear animation if this is the final run (no more retries)
+                  if (data.status === "passed" || data.retry_attempt >= data.max_retries) {
+                    setAnimatingRunId(null);
+                    setVisibleStepIndex(-1);
+                    setRetryStatus(null);
+                  }
+                  break;
+
+                case "step_retry":
+                  // Step is being retried - update status
+                  setRetryStatus(`Retrying step ${data.step_number} (attempt ${data.attempt}/${data.max_attempts}): ${data.error}`);
+                  break;
+
+                case "test_retry":
+                  // Test is being retried - show status
+                  setRetryStatus(`Retrying test (attempt ${data.attempt}/${data.max_attempts}): ${data.reason}`);
+                  // Reset for new run
                   setVisibleStepIndex(-1);
+                  break;
+
+                case "retry_skipped":
+                  // Intelligent retry decided not to retry
+                  setRetryStatus(`Retry skipped: ${data.reason}${data.details ? ` - ${data.details}` : ""}`);
+                  setAnimatingRunId(null);
                   break;
 
                 case "error":
                   console.error("SSE error:", data.message);
                   setAnimatingRunId(null);
+                  setRetryStatus(null);
                   break;
               }
             } catch (parseError) {
@@ -331,6 +497,7 @@ export default function TestCaseRunsPage() {
     } catch (error) {
       console.error("Failed to run test:", error);
       setAnimatingRunId(null);
+      setRetryStatus(null);
     } finally {
       setIsRunning(false);
       setVisibleStepIndex(-1);
@@ -345,6 +512,16 @@ export default function TestCaseRunsPage() {
       newExpanded.add(runId);
     }
     setExpandedRuns(newExpanded);
+  };
+
+  const toggleRetryGroupExpanded = (originalRunId: number) => {
+    const newExpanded = new Set(expandedRetryGroups);
+    if (newExpanded.has(originalRunId)) {
+      newExpanded.delete(originalRunId);
+    } else {
+      newExpanded.add(originalRunId);
+    }
+    setExpandedRetryGroups(newExpanded);
   };
 
   const getPriorityColor = (priority: string) => {
@@ -455,6 +632,60 @@ export default function TestCaseRunsPage() {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            {/* Retry toggle */}
+            <div className="flex items-center gap-2">
+              <label className="flex items-center gap-1.5 text-sm cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={retryEnabled}
+                  onChange={(e) => setRetryEnabled(e.target.checked)}
+                  disabled={isRunning}
+                  className="rounded border-border"
+                />
+                <RefreshCw className="h-3.5 w-3.5 text-muted-foreground" />
+                <span className="text-muted-foreground">Retry</span>
+              </label>
+            </div>
+
+            {/* Retry options (shown when retry is enabled) */}
+            {retryEnabled && (
+              <>
+                <div className="relative">
+                  <select
+                    value={maxRetries}
+                    onChange={(e) => setMaxRetries(parseInt(e.target.value))}
+                    disabled={isRunning}
+                    className="appearance-none px-2 py-2 pr-6 rounded-lg border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 disabled:opacity-50"
+                    title="Max retries"
+                  >
+                    <option value={1}>1x</option>
+                    <option value={2}>2x</option>
+                    <option value={3}>3x</option>
+                  </select>
+                  <ChevronDown className="absolute right-1 top-1/2 -translate-y-1/2 h-3 w-3 pointer-events-none text-muted-foreground" />
+                </div>
+
+                {/* Retry mode (only show if intelligent retry is enabled) */}
+                {features.intelligent_retry && (
+                  <div className="relative">
+                    <select
+                      value={retryMode}
+                      onChange={(e) => setRetryMode(e.target.value as "simple" | "intelligent")}
+                      disabled={isRunning}
+                      className="appearance-none px-2 py-2 pr-6 rounded-lg border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 disabled:opacity-50"
+                      title="Retry mode"
+                    >
+                      <option value="simple">Simple</option>
+                      <option value="intelligent">Smart</option>
+                    </select>
+                    <ChevronDown className="absolute right-1 top-1/2 -translate-y-1/2 h-3 w-3 pointer-events-none text-muted-foreground" />
+                  </div>
+                )}
+              </>
+            )}
+
+            <div className="w-px h-6 bg-border" />
+
             {/* Browser selector */}
             {browsers.length > 0 && (
               <div className="relative">
@@ -491,6 +722,23 @@ export default function TestCaseRunsPage() {
       </header>
 
       <main className="container mx-auto max-w-4xl px-6 py-8">
+        {/* Retry Status Banner */}
+        <AnimatePresence>
+          {retryStatus && (
+            <motion.div
+              initial={{ opacity: 0, y: -10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              className="mb-4 p-3 rounded-lg bg-amber-500/10 border border-amber-500/20 flex items-center gap-2"
+            >
+              <AlertCircle className="h-4 w-4 text-amber-500 shrink-0" />
+              <span className="text-sm text-amber-700 dark:text-amber-400">
+                {retryStatus}
+              </span>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
         {/* Test Case Info */}
         <motion.div
           initial={{ opacity: 0, y: 10 }}
@@ -535,164 +783,238 @@ export default function TestCaseRunsPage() {
           ) : (
             <div className="space-y-3">
               <AnimatePresence>
-                {runs.map((run, index) => (
-                  <motion.div
-                    key={run.id}
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ delay: index * 0.05 }}
-                    className="rounded-lg border border-border bg-card overflow-hidden"
-                  >
-                    {/* Run Header */}
-                    <button
-                      onClick={() => toggleRunExpanded(run.id)}
-                      className="w-full p-4 flex items-center justify-between hover:bg-muted/50 transition-colors"
+                {runGroups.map((group, groupIndex) => {
+                  const hasRetries = group.retries.length > 0;
+                  const latestRun = hasRetries ? group.retries[group.retries.length - 1] : group.original;
+                  const isRetryGroupExpanded = expandedRetryGroups.has(group.original.id);
+
+                  // Helper to render a single run
+                  const renderRun = (run: TestRun, isNested: boolean = false) => (
+                    <motion.div
+                      key={run.id}
+                      id={`run-${run.id}`}
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      className={cn(
+                        "rounded-lg border border-border bg-card overflow-hidden",
+                        isNested && "ml-6 border-l-2 border-l-amber-500/50"
+                      )}
                     >
-                      <div className="flex items-center gap-4">
-                        {getStatusIcon(run.status)}
-                        <div className="text-left">
-                          <div className="flex items-center gap-2">
-                            <span className="font-medium">Run #{run.id}</span>
-                            <span
-                              className={cn(
-                                "text-xs px-2 py-0.5 rounded-full",
-                                run.status === "passed"
-                                  ? "bg-green-500/10 text-green-500"
-                                  : run.status === "failed"
-                                  ? "bg-red-500/10 text-red-500"
-                                  : "bg-muted text-muted-foreground"
-                              )}
-                            >
-                              {run.status}
-                            </span>
-                          </div>
-                          <p className="text-sm text-muted-foreground">
-                            {formatDate(run.created_at)}
-                          </p>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-4">
-                        <div className="text-right text-sm">
-                          {run.id === animatingRunId ? (
-                            <span className="text-muted-foreground">
-                              {Math.max(0, visibleStepIndex + 1)} / {run.steps.length} steps
-                            </span>
-                          ) : (
-                            <>
-                              <span className="text-green-500">{run.pass_count} passed</span>
-                              {run.error_count > 0 && (
-                                <span className="text-red-500 ml-2">
-                                  {run.error_count} failed
-                                </span>
-                              )}
-                            </>
-                          )}
-                        </div>
-                        {expandedRuns.has(run.id) ? (
-                          <ChevronDown className="h-5 w-5 text-muted-foreground" />
-                        ) : (
-                          <ChevronRight className="h-5 w-5 text-muted-foreground" />
-                        )}
-                      </div>
-                    </button>
-
-                    {/* Run Steps */}
-                    {expandedRuns.has(run.id) && (
-                      <motion.div
-                        initial={{ height: 0, opacity: 0 }}
-                        animate={{ height: "auto", opacity: 1 }}
-                        exit={{ height: 0, opacity: 0 }}
-                        className="border-t border-border bg-muted/30"
+                      {/* Run Header */}
+                      <button
+                        onClick={() => toggleRunExpanded(run.id)}
+                        className="w-full p-4 flex items-center justify-between hover:bg-muted/50 transition-colors"
                       >
-                        <div className="p-4 space-y-2">
-                          {run.steps.map((step, stepIndex) => {
-                            const displayStatus = getStepDisplayStatus(run.id, stepIndex, step.status);
-                            const visible = isStepVisible(run.id, stepIndex);
-
-                            return (
-                              <motion.div
-                                key={step.id}
-                                initial={{ opacity: 0, x: -10 }}
-                                animate={{
-                                  opacity: visible ? 1 : 0.3,
-                                  x: visible ? 0 : -10
-                                }}
-                                transition={{ duration: 0.2 }}
+                        <div className="flex items-center gap-4">
+                          {getStatusIcon(run.status)}
+                          <div className="text-left">
+                            <div className="flex items-center gap-2">
+                              <span className="font-medium">
+                                {isNested ? `Retry #${run.retry_attempt}` : `Run #${run.id}`}
+                              </span>
+                              <span
                                 className={cn(
-                                  "flex items-start gap-3 p-3 rounded-lg",
-                                  displayStatus === "failed"
-                                    ? "bg-red-500/5"
-                                    : displayStatus === "running"
-                                    ? "bg-primary/5 border border-primary/20"
-                                    : "bg-background"
+                                  "text-xs px-2 py-0.5 rounded-full",
+                                  run.status === "passed"
+                                    ? "bg-green-500/10 text-green-500"
+                                    : run.status === "failed"
+                                    ? "bg-red-500/10 text-red-500"
+                                    : "bg-muted text-muted-foreground"
                                 )}
                               >
-                                <div className="pt-0.5">
-                                  {getStepStatusIcon(displayStatus)}
-                                </div>
-                                <div className="flex-1 min-w-0">
-                                  <div className="flex items-center gap-2">
-                                    <span className="text-xs px-1.5 py-0.5 rounded bg-primary/10 text-primary font-medium">
-                                      {ACTION_LABELS[step.action] || step.action}
-                                    </span>
-                                    {displayStatus !== "pending" && displayStatus !== "running" && (
-                                      <span className="text-xs text-muted-foreground">
-                                        {formatDuration(step.duration)}
-                                      </span>
-                                    )}
-                                    {displayStatus === "running" && (
-                                      <span className="text-xs text-primary animate-pulse">
-                                        executing...
-                                      </span>
-                                    )}
-                                  </div>
-                                  {(step.target || step.value) && (
-                                    <div className="mt-1 text-sm text-muted-foreground font-mono">
-                                      {step.target && <span>target: {step.target}</span>}
-                                      {step.target && step.value && <span> | </span>}
-                                      {step.value && <span>value: {step.value}</span>}
-                                    </div>
-                                  )}
-                                  {step.error && displayStatus === "failed" && (
-                                    <div className="mt-2 text-sm text-red-500 bg-red-500/10 p-2 rounded">
-                                      {step.error}
-                                    </div>
-                                  )}
-                                  {step.screenshot && (
-                                    <div className="mt-3">
-                                      <p className="text-xs text-muted-foreground mb-1">
-                                        {step.action === "screenshot" ? "Captured screenshot:" : "Screenshot at failure:"}
-                                      </p>
-                                      <img
-                                        src={`data:image/png;base64,${step.screenshot}`}
-                                        alt={step.action === "screenshot" ? "Captured screenshot" : "Screenshot at failure"}
-                                        className="rounded border border-border max-w-full h-auto max-h-64 cursor-pointer hover:opacity-90 transition-opacity"
-                                        onClick={() => {
-                                          // Open in new tab for full view
-                                          const win = window.open();
-                                          if (win) {
-                                            win.document.write(`<img src="data:image/png;base64,${step.screenshot}" style="max-width:100%"/>`);
-                                          }
-                                        }}
-                                      />
-                                    </div>
-                                  )}
-                                </div>
-                              </motion.div>
-                            );
-                          })}
-                        </div>
-                        {run.summary && (
-                          <div className="px-4 pb-4">
+                                {run.status}
+                              </span>
+                              {run.retry_attempt > 0 && !isNested && (
+                                <span className="text-xs px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-600 dark:text-amber-400">
+                                  attempt {run.retry_attempt + 1}
+                                </span>
+                              )}
+                            </div>
                             <p className="text-sm text-muted-foreground">
-                              {run.summary}
+                              {formatDate(run.created_at)}
                             </p>
                           </div>
+                        </div>
+                        <div className="flex items-center gap-4">
+                          <div className="text-right text-sm">
+                            {run.id === animatingRunId ? (
+                              <span className="text-muted-foreground">
+                                {Math.max(0, visibleStepIndex + 1)} / {run.steps.length} steps
+                              </span>
+                            ) : (
+                              <>
+                                <span className="text-green-500">{run.pass_count} passed</span>
+                                {run.error_count > 0 && (
+                                  <span className="text-red-500 ml-2">
+                                    {run.error_count} failed
+                                  </span>
+                                )}
+                              </>
+                            )}
+                          </div>
+                          {expandedRuns.has(run.id) ? (
+                            <ChevronDown className="h-5 w-5 text-muted-foreground" />
+                          ) : (
+                            <ChevronRight className="h-5 w-5 text-muted-foreground" />
+                          )}
+                        </div>
+                      </button>
+
+                      {/* Run Steps */}
+                      {expandedRuns.has(run.id) && (
+                        <motion.div
+                          initial={{ height: 0, opacity: 0 }}
+                          animate={{ height: "auto", opacity: 1 }}
+                          exit={{ height: 0, opacity: 0 }}
+                          className="border-t border-border bg-muted/30"
+                        >
+                          <div className="p-4 space-y-2">
+                            {run.steps.map((step, stepIndex) => {
+                              const displayStatus = getStepDisplayStatus(run.id, stepIndex, step.status);
+                              const visible = isStepVisible(run.id, stepIndex);
+
+                              return (
+                                <motion.div
+                                  key={step.id}
+                                  initial={{ opacity: 0, x: -10 }}
+                                  animate={{
+                                    opacity: visible ? 1 : 0.3,
+                                    x: visible ? 0 : -10
+                                  }}
+                                  transition={{ duration: 0.2 }}
+                                  className={cn(
+                                    "flex items-start gap-3 p-3 rounded-lg",
+                                    displayStatus === "failed"
+                                      ? "bg-red-500/5"
+                                      : displayStatus === "running"
+                                      ? "bg-primary/5 border border-primary/20"
+                                      : "bg-background"
+                                  )}
+                                >
+                                  <div className="pt-0.5">
+                                    {getStepStatusIcon(displayStatus)}
+                                  </div>
+                                  <div className="flex-1 min-w-0">
+                                    <div className="flex items-center gap-2">
+                                      <span className="text-xs px-1.5 py-0.5 rounded bg-primary/10 text-primary font-medium">
+                                        {ACTION_LABELS[step.action] || step.action}
+                                      </span>
+                                      {displayStatus !== "pending" && displayStatus !== "running" && (
+                                        <span className="text-xs text-muted-foreground">
+                                          {formatDuration(step.duration)}
+                                        </span>
+                                      )}
+                                      {displayStatus === "running" && (
+                                        <span className="text-xs text-primary animate-pulse">
+                                          {step.attempt && step.attempt > 1
+                                            ? `retry ${step.attempt - 1}...`
+                                            : "executing..."}
+                                        </span>
+                                      )}
+                                      {step.attempt && step.attempt > 1 && displayStatus !== "running" && (
+                                        <span className="text-xs px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-600 dark:text-amber-400">
+                                          {step.attempt - 1} {step.attempt === 2 ? "retry" : "retries"}
+                                        </span>
+                                      )}
+                                    </div>
+                                    {(step.target || step.value) && (
+                                      <div className="mt-1 text-sm text-muted-foreground font-mono">
+                                        {step.target && <span>target: {step.target}</span>}
+                                        {step.target && step.value && <span> | </span>}
+                                        {step.value && <span>value: {step.value}</span>}
+                                      </div>
+                                    )}
+                                    {step.error && displayStatus === "failed" && (
+                                      <div className="mt-2 text-sm text-red-500 bg-red-500/10 p-2 rounded">
+                                        {step.error}
+                                      </div>
+                                    )}
+                                    {step.screenshot && (
+                                      <div className="mt-3">
+                                        <p className="text-xs text-muted-foreground mb-1">
+                                          {step.action === "screenshot" ? "Captured screenshot:" : "Screenshot at failure:"}
+                                        </p>
+                                        <img
+                                          src={`data:image/png;base64,${step.screenshot}`}
+                                          alt={step.action === "screenshot" ? "Captured screenshot" : "Screenshot at failure"}
+                                          className="rounded border border-border max-w-full h-auto max-h-64 cursor-pointer hover:opacity-90 transition-opacity"
+                                          onClick={() => {
+                                            const win = window.open();
+                                            if (win) {
+                                              win.document.write(`<img src="data:image/png;base64,${step.screenshot}" style="max-width:100%"/>`);
+                                            }
+                                          }}
+                                        />
+                                      </div>
+                                    )}
+                                  </div>
+                                </motion.div>
+                              );
+                            })}
+                          </div>
+                          {run.summary && (
+                            <div className="px-4 pb-4">
+                              <p className="text-sm text-muted-foreground">
+                                {run.summary}
+                              </p>
+                            </div>
+                          )}
+                        </motion.div>
+                      )}
+                    </motion.div>
+                  );
+
+                  return (
+                    <motion.div
+                      key={group.original.id}
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ delay: groupIndex * 0.05 }}
+                      className="space-y-2"
+                    >
+                      {/* Main run card */}
+                      <div className="relative">
+                        {renderRun(group.original, false)}
+
+                        {/* Retry indicator badge */}
+                        {hasRetries && (
+                          <button
+                            onClick={() => toggleRetryGroupExpanded(group.original.id)}
+                            className={cn(
+                              "absolute -bottom-2 left-6 flex items-center gap-1.5 px-2 py-1 rounded-full text-xs font-medium transition-colors",
+                              latestRun.status === "passed"
+                                ? "bg-green-500/20 text-green-600 dark:text-green-400 hover:bg-green-500/30"
+                                : "bg-amber-500/20 text-amber-600 dark:text-amber-400 hover:bg-amber-500/30"
+                            )}
+                          >
+                            <RefreshCw className="h-3 w-3" />
+                            {group.retries.length} {group.retries.length === 1 ? "retry" : "retries"}
+                            {latestRun.status === "passed" && (
+                              <CheckCircle className="h-3 w-3 ml-0.5" />
+                            )}
+                            {isRetryGroupExpanded ? (
+                              <ChevronDown className="h-3 w-3" />
+                            ) : (
+                              <ChevronRight className="h-3 w-3" />
+                            )}
+                          </button>
                         )}
-                      </motion.div>
-                    )}
-                  </motion.div>
-                ))}
+                      </div>
+
+                      {/* Nested retry runs */}
+                      {hasRetries && isRetryGroupExpanded && (
+                        <motion.div
+                          initial={{ opacity: 0, height: 0 }}
+                          animate={{ opacity: 1, height: "auto" }}
+                          exit={{ opacity: 0, height: 0 }}
+                          className="space-y-2 pt-3"
+                        >
+                          {group.retries.map((retry) => renderRun(retry, true))}
+                        </motion.div>
+                      )}
+                    </motion.div>
+                  );
+                })}
               </AnimatePresence>
             </div>
           )}

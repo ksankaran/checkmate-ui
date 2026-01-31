@@ -24,6 +24,7 @@ import {
   X,
   Loader2,
   Layers,
+  RefreshCw,
 } from "lucide-react";
 import { ThemeToggle } from "@/components/dashboard/ThemeToggle";
 import { API_URL } from "@/lib/api";
@@ -47,6 +48,10 @@ interface TestRun {
   error_count: number;
   created_at: string;
   test_case_id: number | null;
+  // Retry tracking
+  retry_attempt: number;
+  max_retries: number;
+  original_run_id: number | null;
 }
 
 interface TestCase {
@@ -241,15 +246,31 @@ export default function ProjectDetailPage() {
   const runnableTestCases = filteredTestCases.filter((tc) => getStepsCount(tc) > 0);
   const skippedCount = filteredTestCases.length - runnableTestCases.length;
 
-  // Group test runs: suites grouped by batch_id, individual runs separate
+  // Group test runs: suites grouped by batch_id, individual runs with retry grouping
   interface GroupedRun {
     type: "suite" | "individual";
     batchId?: string;
     runs: TestRun[];
+    retries: TestRun[];  // For individual runs with retries
     passCount: number;
     errorCount: number;
     latestRun: TestRun;
   }
+
+  // Track expanded retry groups
+  const [expandedRetryGroups, setExpandedRetryGroups] = useState<Set<number>>(new Set());
+
+  const toggleRetryGroupExpanded = (originalRunId: number) => {
+    setExpandedRetryGroups((prev) => {
+      const newSet = new Set(prev);
+      if (newSet.has(originalRunId)) {
+        newSet.delete(originalRunId);
+      } else {
+        newSet.add(originalRunId);
+      }
+      return newSet;
+    });
+  };
 
   const groupedTestRuns: GroupedRun[] = (() => {
     const suiteMap = new Map<string, TestRun[]>();
@@ -279,20 +300,69 @@ export default function ProjectDetailPage() {
         type: "suite",
         batchId,
         runs: sortedRuns,
+        retries: [],
         passCount,
         errorCount,
         latestRun: sortedRuns[0],
       });
     });
 
-    // Add individual runs
+    // Group individual runs by original_run_id for retry grouping
+    // Two-pass approach: first collect originals, then add retries
+    const retryMap = new Map<number, { original: TestRun | null; retries: TestRun[] }>();
+
+    // First pass: identify all original runs
     individualRuns.forEach((run) => {
+      if (run.original_run_id === null) {
+        // This is an original run
+        const existing = retryMap.get(run.id);
+        if (existing) {
+          existing.original = run;
+        } else {
+          retryMap.set(run.id, { original: run, retries: [] });
+        }
+      }
+    });
+
+    // Second pass: add retries to their groups
+    individualRuns.forEach((run) => {
+      if (run.original_run_id !== null) {
+        // This is a retry
+        const existing = retryMap.get(run.original_run_id);
+        if (existing) {
+          existing.retries.push(run);
+        } else {
+          // Orphan retry (original not in list) - create group with retry only
+          retryMap.set(run.original_run_id, { original: null, retries: [run] });
+        }
+      }
+    });
+
+    // Add individual runs with retry grouping
+    retryMap.forEach((group) => {
+      // Sort retries by retry_attempt
+      group.retries.sort((a, b) => a.retry_attempt - b.retry_attempt);
+
+      // Determine the original run (use first retry if original is missing)
+      const originalRun = group.original || group.retries[0];
+      if (!originalRun) return; // Skip empty groups
+
+      // Retries to show (exclude the one used as original if original was missing)
+      const retriesToShow = group.original
+        ? group.retries
+        : group.retries.slice(1);
+
+      const latestRun = group.retries.length > 0
+        ? group.retries[group.retries.length - 1]
+        : originalRun;
+
       groups.push({
         type: "individual",
-        runs: [run],
-        passCount: run.pass_count,
-        errorCount: run.error_count,
-        latestRun: run,
+        runs: [originalRun],
+        retries: retriesToShow,
+        passCount: latestRun.pass_count,
+        errorCount: latestRun.error_count,
+        latestRun: latestRun,
       });
     });
 
@@ -1042,49 +1112,131 @@ export default function ProjectDetailPage() {
                   );
                 }
 
-                // Individual run
-                const run = group.latestRun;
-                const testCase = run.test_case_id
-                  ? testCases.find((tc) => tc.id === run.test_case_id)
+                // Individual run (with potential retries)
+                const originalRun = group.runs[0];
+                const hasRetries = group.retries.length > 0;
+                const latestRun = group.latestRun;
+                const testCase = originalRun.test_case_id
+                  ? testCases.find((tc) => tc.id === originalRun.test_case_id)
                   : null;
+                const isRetryExpanded = expandedRetryGroups.has(originalRun.id);
 
                 return (
-                  <Link key={run.id} href={`/projects/${projectId}/runs?runId=${run.id}`}>
-                    <motion.div
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      className="p-4 rounded-lg border border-border bg-card flex items-center justify-between hover:border-primary/30 transition-colors cursor-pointer"
-                    >
-                      <div className="flex items-center gap-4">
-                        {run.status === "passed" ? (
-                          <CheckCircle className="h-5 w-5 text-green-500" />
-                        ) : run.status === "failed" ? (
-                          <XCircle className="h-5 w-5 text-red-500" />
-                        ) : (
-                          <Clock className="h-5 w-5 text-muted-foreground" />
-                        )}
-                        <div>
-                          <p className="font-medium">
-                            {testCase?.name || run.summary || `Test Run #${run.id}`}
-                          </p>
-                          <p className="text-sm text-muted-foreground">
-                            {new Date(run.created_at).toLocaleString()}
-                          </p>
+                  <motion.div
+                    key={originalRun.id}
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    className="space-y-2"
+                  >
+                    <div className="relative">
+                      <Link href={`/projects/${projectId}/test-cases/${originalRun.test_case_id}/runs?runId=${originalRun.id}`}>
+                        <div className="p-4 rounded-lg border border-border bg-card flex items-center justify-between hover:border-primary/30 transition-colors cursor-pointer">
+                          <div className="flex items-center gap-4">
+                            {latestRun.status === "passed" ? (
+                              <CheckCircle className="h-5 w-5 text-green-500" />
+                            ) : latestRun.status === "failed" ? (
+                              <XCircle className="h-5 w-5 text-red-500" />
+                            ) : latestRun.status === "running" ? (
+                              <Loader2 className="h-5 w-5 text-primary animate-spin" />
+                            ) : (
+                              <Clock className="h-5 w-5 text-muted-foreground" />
+                            )}
+                            <div>
+                              <p className="font-medium">
+                                {testCase?.name || originalRun.summary || `Test Run #${originalRun.id}`}
+                              </p>
+                              <p className="text-sm text-muted-foreground">
+                                {new Date(originalRun.created_at).toLocaleString()}
+                              </p>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-4">
+                            <span className="text-sm text-green-500">
+                              {latestRun.pass_count} passed
+                            </span>
+                            {latestRun.error_count > 0 && (
+                              <span className="text-sm text-red-500">
+                                {latestRun.error_count} failed
+                              </span>
+                            )}
+                            <ChevronRight className="h-5 w-5 text-muted-foreground" />
+                          </div>
                         </div>
-                      </div>
-                      <div className="flex items-center gap-4">
-                        <span className="text-sm text-green-500">
-                          {run.pass_count} passed
-                        </span>
-                        {run.error_count > 0 && (
-                          <span className="text-sm text-red-500">
-                            {run.error_count} failed
-                          </span>
-                        )}
-                        <ChevronRight className="h-5 w-5 text-muted-foreground" />
-                      </div>
-                    </motion.div>
-                  </Link>
+                      </Link>
+
+                      {/* Retry indicator badge */}
+                      {hasRetries && (
+                        <button
+                          onClick={(e) => {
+                            e.preventDefault();
+                            toggleRetryGroupExpanded(originalRun.id);
+                          }}
+                          className={`absolute -bottom-2 left-6 flex items-center gap-1.5 px-2 py-1 rounded-full text-xs font-medium transition-colors ${
+                            latestRun.status === "passed"
+                              ? "bg-green-500/20 text-green-600 dark:text-green-400 hover:bg-green-500/30"
+                              : "bg-amber-500/20 text-amber-600 dark:text-amber-400 hover:bg-amber-500/30"
+                          }`}
+                        >
+                          <RefreshCw className="h-3 w-3" />
+                          {group.retries.length} {group.retries.length === 1 ? "retry" : "retries"}
+                          {latestRun.status === "passed" && (
+                            <CheckCircle className="h-3 w-3 ml-0.5" />
+                          )}
+                          {isRetryExpanded ? (
+                            <ChevronDown className="h-3 w-3" />
+                          ) : (
+                            <ChevronRight className="h-3 w-3" />
+                          )}
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Nested retry runs */}
+                    {hasRetries && isRetryExpanded && (
+                      <motion.div
+                        initial={{ opacity: 0, height: 0 }}
+                        animate={{ opacity: 1, height: "auto" }}
+                        exit={{ opacity: 0, height: 0 }}
+                        className="space-y-2 pt-3"
+                      >
+                        {group.retries.map((retry) => (
+                          <Link
+                            key={retry.id}
+                            href={`/projects/${projectId}/test-cases/${retry.test_case_id}/runs?runId=${retry.id}`}
+                          >
+                            <div className="ml-6 p-3 rounded-lg border border-border border-l-2 border-l-amber-500/50 bg-card flex items-center justify-between hover:border-primary/30 transition-colors cursor-pointer">
+                              <div className="flex items-center gap-3">
+                                {retry.status === "passed" ? (
+                                  <CheckCircle className="h-4 w-4 text-green-500" />
+                                ) : retry.status === "failed" ? (
+                                  <XCircle className="h-4 w-4 text-red-500" />
+                                ) : retry.status === "running" ? (
+                                  <Loader2 className="h-4 w-4 text-primary animate-spin" />
+                                ) : (
+                                  <Clock className="h-4 w-4 text-muted-foreground" />
+                                )}
+                                <div>
+                                  <p className="text-sm font-medium">
+                                    Retry #{retry.retry_attempt}
+                                  </p>
+                                  <p className="text-xs text-muted-foreground">
+                                    {new Date(retry.created_at).toLocaleString()}
+                                  </p>
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-3 text-sm">
+                                <span className="text-green-500">{retry.pass_count} passed</span>
+                                {retry.error_count > 0 && (
+                                  <span className="text-red-500">{retry.error_count} failed</span>
+                                )}
+                                <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                              </div>
+                            </div>
+                          </Link>
+                        ))}
+                      </motion.div>
+                    )}
+                  </motion.div>
                 );
               })}
             </div>
