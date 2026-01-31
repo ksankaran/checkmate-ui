@@ -955,9 +955,12 @@ export default function EditTestCasePage() {
                               alt={step.action === "screenshot" ? "Captured screenshot" : "Screenshot at failure"}
                               className="rounded border border-border max-w-full h-auto max-h-48 cursor-pointer hover:opacity-90"
                               onClick={() => {
-                                const win = window.open();
+                                const win = window.open("", "_blank");
                                 if (win) {
-                                  win.document.write(`<img src="data:image/png;base64,${step.screenshot}" style="max-width:100%"/>`);
+                                  const img = win.document.createElement("img");
+                                  img.src = `data:image/png;base64,${step.screenshot}`;
+                                  img.style.maxWidth = "100%";
+                                  win.document.body.appendChild(img);
                                 }
                               }}
                             />

@@ -545,15 +545,17 @@ export default function ProjectDetailPage() {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <a
-              href={project.base_url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="p-2 rounded-lg hover:bg-muted transition-colors"
-              title="Open application"
-            >
-              <ExternalLink className="h-5 w-5" />
-            </a>
+            {project.base_url && /^https?:\/\//i.test(project.base_url) && (
+              <a
+                href={project.base_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="p-2 rounded-lg hover:bg-muted transition-colors"
+                title="Open application"
+              >
+                <ExternalLink className="h-5 w-5" />
+              </a>
+            )}
             <button
               onClick={() => setShowDeleteDialog(true)}
               className="p-2 rounded-lg hover:bg-red-500/10 text-muted-foreground hover:text-red-500 transition-colors"

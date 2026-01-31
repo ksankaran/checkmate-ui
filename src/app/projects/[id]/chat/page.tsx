@@ -415,7 +415,7 @@ export default function ProjectChatPage() {
                 </button>
               </>
             )}
-            {project && (
+            {project && project.base_url && /^https?:\/\//i.test(project.base_url) && (
               <a
                 href={project.base_url}
                 target="_blank"
