@@ -15,6 +15,7 @@ import {
   History,
   ChevronDown,
   RefreshCw,
+  Layers,
 } from "lucide-react";
 import { ThemeToggle } from "@/components/dashboard/ThemeToggle";
 import { cn } from "@/lib/utils";
@@ -36,8 +37,15 @@ interface TestCase {
   status: string;
   steps: string | TestStep[];
   expected_result: string | null;
+  fixture_ids: string | number[] | null;
   created_at: string;
   updated_at: string;
+}
+
+interface Fixture {
+  id: number;
+  name: string;
+  description: string | null;
 }
 
 interface Project {
@@ -78,6 +86,7 @@ export default function TestCaseDetailPage() {
 
   const [testCase, setTestCase] = useState<TestCase | null>(null);
   const [project, setProject] = useState<Project | null>(null);
+  const [fixtures, setFixtures] = useState<Fixture[]>([]);
   const [loading, setLoading] = useState(true);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -100,6 +109,7 @@ export default function TestCaseDetailPage() {
     fetchProject();
     fetchBrowsers();
     fetchFeatures();
+    fetchFixtures();
   }, [projectId, testCaseId]);
 
   async function fetchFeatures() {
@@ -153,6 +163,18 @@ export default function TestCaseDetailPage() {
     }
   }
 
+  async function fetchFixtures() {
+    try {
+      const res = await fetch(`${API_URL}/api/projects/${projectId}/fixtures`);
+      if (res.ok) {
+        const data = await res.json();
+        setFixtures(data);
+      }
+    } catch (error) {
+      console.error("Failed to fetch fixtures:", error);
+    }
+  }
+
   async function handleDelete() {
     setIsDeleting(true);
     try {
@@ -202,6 +224,21 @@ export default function TestCaseDetailPage() {
     } catch {
       return [];
     }
+  };
+
+  const parseFixtureIds = (): number[] => {
+    if (!testCase?.fixture_ids) return [];
+    if (Array.isArray(testCase.fixture_ids)) return testCase.fixture_ids;
+    try {
+      return JSON.parse(testCase.fixture_ids);
+    } catch {
+      return [];
+    }
+  };
+
+  const getAssociatedFixtures = (): Fixture[] => {
+    const fixtureIds = parseFixtureIds();
+    return fixtures.filter((f) => fixtureIds.includes(f.id));
   };
 
   if (loading) {
@@ -450,6 +487,23 @@ export default function TestCaseDetailPage() {
               </span>
             ))}
           </div>
+
+          {/* Fixtures */}
+          {getAssociatedFixtures().length > 0 && (
+            <div className="flex flex-wrap items-center gap-2 mb-4">
+              <Layers className="h-4 w-4 text-blue-500" />
+              <span className="text-sm text-muted-foreground">Fixtures:</span>
+              {getAssociatedFixtures().map((fixture) => (
+                <span
+                  key={fixture.id}
+                  className="text-xs px-2 py-1 rounded bg-blue-500/10 text-blue-500 border border-blue-500/20"
+                  title={fixture.description || undefined}
+                >
+                  {fixture.name}
+                </span>
+              ))}
+            </div>
+          )}
 
           <div className="text-xs text-muted-foreground">
             Created {new Date(testCase.created_at).toLocaleDateString()}
