@@ -64,6 +64,7 @@ interface TestRun {
   pass_count: number;
   created_at: string;
   steps: RunStep[];
+  total_steps?: number; // Total steps expected (for progress display)
   // Retry tracking
   retry_attempt: number;
   max_retries: number;
@@ -362,6 +363,7 @@ export default function TestCaseRunsPage() {
                     pass_count: 0,
                     created_at: new Date().toISOString(),
                     steps: [],
+                    total_steps: totalSteps,
                     // Retry tracking
                     retry_attempt: data.retry_attempt || 0,
                     max_retries: data.max_retries || 0,
@@ -842,7 +844,7 @@ export default function TestCaseRunsPage() {
                           <div className="text-right text-sm">
                             {run.id === animatingRunId ? (
                               <span className="text-muted-foreground">
-                                {Math.max(0, visibleStepIndex + 1)} / {run.steps.length} steps
+                                {Math.max(0, visibleStepIndex + 1)} / {run.total_steps || run.steps.length} steps
                               </span>
                             ) : (
                               <>
