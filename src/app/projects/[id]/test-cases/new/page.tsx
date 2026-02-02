@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import {
@@ -10,6 +10,7 @@ import {
   Save,
   GripVertical,
   ChevronDown,
+  CheckCircle,
 } from "lucide-react";
 import { ThemeToggle } from "@/components/dashboard/ThemeToggle";
 import { cn } from "@/lib/utils";
@@ -49,6 +50,14 @@ interface TestStep {
   description: string;
 }
 
+interface Fixture {
+  id: number;
+  name: string;
+  description: string | null;
+  scope: string;
+  has_valid_cache: boolean;
+}
+
 export default function NewTestCasePage() {
   const params = useParams();
   const router = useRouter();
@@ -65,6 +74,34 @@ export default function NewTestCasePage() {
   const [error, setError] = useState("");
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
+
+  // Fixtures
+  const [fixtures, setFixtures] = useState<Fixture[]>([]);
+  const [selectedFixtureIds, setSelectedFixtureIds] = useState<number[]>([]);
+
+  useEffect(() => {
+    fetchFixtures();
+  }, [projectId]);
+
+  async function fetchFixtures() {
+    try {
+      const res = await fetch(`${API_URL}/api/projects/${projectId}/fixtures`);
+      if (res.ok) {
+        const data = await res.json();
+        setFixtures(data);
+      }
+    } catch (error) {
+      console.error("Failed to fetch fixtures:", error);
+    }
+  }
+
+  const toggleFixture = (fixtureId: number) => {
+    setSelectedFixtureIds((prev) =>
+      prev.includes(fixtureId)
+        ? prev.filter((id) => id !== fixtureId)
+        : [...prev, fixtureId]
+    );
+  };
 
   const addStep = () => {
     setSteps([
@@ -147,6 +184,7 @@ export default function NewTestCasePage() {
           value: s.value || null,
           description: s.description,
         })),
+        fixture_ids: selectedFixtureIds.length > 0 ? selectedFixtureIds : null,
       };
 
       const res = await fetch(
@@ -255,6 +293,63 @@ export default function NewTestCasePage() {
               </div>
             </div>
           </div>
+
+          {/* Fixtures */}
+          {fixtures.length > 0 && (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h2 className="text-lg font-medium">Fixtures</h2>
+                  <p className="text-sm text-muted-foreground">
+                    Reusable setup sequences that run before the test.
+                  </p>
+                </div>
+                <Link
+                  href={`/projects/${projectId}/settings`}
+                  className="text-sm text-primary hover:underline"
+                >
+                  Manage fixtures
+                </Link>
+              </div>
+              <div className="space-y-2">
+                {fixtures.map((fixture) => (
+                  <label
+                    key={fixture.id}
+                    className="flex items-center gap-3 p-3 rounded-lg border border-border hover:bg-muted/30 cursor-pointer transition-colors"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selectedFixtureIds.includes(fixture.id)}
+                      onChange={() => toggleFixture(fixture.id)}
+                      className="rounded border-border"
+                    />
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium">{fixture.name}</span>
+                        <span
+                          className={`text-xs px-2 py-0.5 rounded ${
+                            fixture.scope === "cached"
+                              ? "bg-blue-500/20 text-blue-500"
+                              : "bg-orange-500/20 text-orange-500"
+                          }`}
+                        >
+                          {fixture.scope}
+                        </span>
+                        {fixture.scope === "cached" && fixture.has_valid_cache && (
+                          <CheckCircle className="h-3 w-3 text-green-500" />
+                        )}
+                      </div>
+                      {fixture.description && (
+                        <p className="text-sm text-muted-foreground">
+                          {fixture.description}
+                        </p>
+                      )}
+                    </div>
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Test Steps */}
           <div className="space-y-4">

@@ -54,6 +54,8 @@ interface TestStep {
   target: string;
   value: string;
   description: string;
+  isFixture?: boolean;
+  fixtureName?: string;
 }
 
 interface UserMessage {
@@ -72,6 +74,7 @@ interface ExecutionStepResult {
   duration: number | null;
   error: string | null;
   screenshot: string | null;
+  fixture_name: string | null;
 }
 
 interface ExecutionResult {
@@ -87,6 +90,14 @@ interface Browser {
   id: string;
   name: string;
   headless: boolean;
+}
+
+interface Fixture {
+  id: number;
+  name: string;
+  description: string | null;
+  scope: string;
+  has_valid_cache: boolean;
 }
 
 export default function EditTestCasePage() {
@@ -118,10 +129,15 @@ export default function EditTestCasePage() {
   const [isExecuting, setIsExecuting] = useState(false);
   const [executionResult, setExecutionResult] = useState<ExecutionResult | null>(null);
   const [visibleStepIndex, setVisibleStepIndex] = useState<number>(-1);
+  const [executionSteps, setExecutionSteps] = useState<TestStep[]>([]); // Combined fixture + test steps for display
 
   // Browser selection
   const [browsers, setBrowsers] = useState<Browser[]>([]);
   const [selectedBrowser, setSelectedBrowser] = useState<string | null>(null);
+
+  // Fixtures
+  const [fixtures, setFixtures] = useState<Fixture[]>([]);
+  const [selectedFixtureIds, setSelectedFixtureIds] = useState<number[]>([]);
 
   const chatInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -129,6 +145,7 @@ export default function EditTestCasePage() {
   useEffect(() => {
     fetchTestCase();
     fetchBrowsers();
+    fetchFixtures();
   }, [testCaseId]);
 
   useEffect(() => {
@@ -163,6 +180,12 @@ export default function EditTestCasePage() {
         }));
         setSteps(mappedSteps);
         setOriginalSteps(mappedSteps); // Store original steps for AI context
+
+        // Parse fixture_ids
+        const parsedFixtureIds = data.fixture_ids
+          ? (Array.isArray(data.fixture_ids) ? data.fixture_ids : JSON.parse(data.fixture_ids))
+          : [];
+        setSelectedFixtureIds(parsedFixtureIds);
       }
     } catch (error) {
       console.error("Failed to fetch test case:", error);
@@ -186,6 +209,26 @@ export default function EditTestCasePage() {
       console.error("Failed to fetch browsers:", error);
     }
   }
+
+  async function fetchFixtures() {
+    try {
+      const res = await fetch(`${API_URL}/api/projects/${projectId}/fixtures`);
+      if (res.ok) {
+        const data = await res.json();
+        setFixtures(data);
+      }
+    } catch (error) {
+      console.error("Failed to fetch fixtures:", error);
+    }
+  }
+
+  const toggleFixture = (fixtureId: number) => {
+    setSelectedFixtureIds((prev) =>
+      prev.includes(fixtureId)
+        ? prev.filter((id) => id !== fixtureId)
+        : [...prev, fixtureId]
+    );
+  };
 
   const addStep = () => {
     setSteps([
@@ -356,6 +399,45 @@ export default function EditTestCasePage() {
     setVisibleStepIndex(-1);
     setShowChat(true); // Show the panel to display results
 
+    // Build combined execution steps list (fixture steps + test steps)
+    let combinedSteps: TestStep[] = [];
+
+    // Get fixture steps if any fixtures are selected
+    if (selectedFixtureIds.length > 0) {
+      const selectedFixtures = fixtures.filter((f) =>
+        selectedFixtureIds.includes(f.id)
+      );
+      for (const fixture of selectedFixtures) {
+        try {
+          const res = await fetch(`${API_URL}/api/fixtures/${fixture.id}`);
+          if (res.ok) {
+            const fixtureData = await res.json();
+            // setup_steps is a JSON string, parse it
+            const fixtureSteps = typeof fixtureData.setup_steps === "string"
+              ? JSON.parse(fixtureData.setup_steps)
+              : fixtureData.setup_steps || [];
+            combinedSteps.push(
+              ...fixtureSteps.map((s: any) => ({
+                id: crypto.randomUUID(),
+                action: s.action || "unknown",
+                target: s.target || "",
+                value: s.value || "",
+                description: s.description || `[${fixture.name}] ${s.action}`,
+                isFixture: true,
+                fixtureName: fixture.name,
+              }))
+            );
+          }
+        } catch (err) {
+          console.error(`Failed to fetch fixture ${fixture.id}:`, err);
+        }
+      }
+    }
+
+    // Add test case steps
+    combinedSteps.push(...steps.map((s) => ({ ...s, isFixture: false })));
+    setExecutionSteps(combinedSteps);
+
     const stepResults: ExecutionStepResult[] = [];
     let runId: number | null = null;
 
@@ -372,6 +454,7 @@ export default function EditTestCasePage() {
             description: s.description,
           })),
           browser: selectedBrowser,
+          fixture_ids: selectedFixtureIds.length > 0 ? selectedFixtureIds : null,
         }),
       });
 
@@ -427,6 +510,7 @@ export default function EditTestCasePage() {
                     duration: data.duration,
                     error: data.error,
                     screenshot: data.screenshot || null,
+                    fixture_name: data.fixture_name || null,
                   });
                   break;
 
@@ -480,6 +564,7 @@ export default function EditTestCasePage() {
           value: s.value || null,
           description: s.description,
         }))),
+        fixture_ids: selectedFixtureIds.length > 0 ? JSON.stringify(selectedFixtureIds) : null,
       };
 
       const res = await fetch(
@@ -656,6 +741,63 @@ export default function EditTestCasePage() {
               </div>
             </div>
           </div>
+
+          {/* Fixtures */}
+          {fixtures.length > 0 && (
+            <div className="bg-card border border-border rounded-lg p-6">
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <h2 className="text-lg font-medium">Fixtures</h2>
+                  <p className="text-sm text-muted-foreground">
+                    Reusable setup sequences that run before the test.
+                  </p>
+                </div>
+                <Link
+                  href={`/projects/${projectId}/settings`}
+                  className="text-sm text-primary hover:underline"
+                >
+                  Manage fixtures
+                </Link>
+              </div>
+              <div className="space-y-2">
+                {fixtures.map((fixture) => (
+                  <label
+                    key={fixture.id}
+                    className="flex items-center gap-3 p-3 rounded-lg border border-border hover:bg-muted/30 cursor-pointer transition-colors"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selectedFixtureIds.includes(fixture.id)}
+                      onChange={() => toggleFixture(fixture.id)}
+                      className="rounded border-border"
+                    />
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium">{fixture.name}</span>
+                        <span
+                          className={`text-xs px-2 py-0.5 rounded ${
+                            fixture.scope === "cached"
+                              ? "bg-blue-500/20 text-blue-500"
+                              : "bg-orange-500/20 text-orange-500"
+                          }`}
+                        >
+                          {fixture.scope}
+                        </span>
+                        {fixture.scope === "cached" && fixture.has_valid_cache && (
+                          <CheckCircle className="h-3 w-3 text-green-500" />
+                        )}
+                      </div>
+                      {fixture.description && (
+                        <p className="text-sm text-muted-foreground">
+                          {fixture.description}
+                        </p>
+                      )}
+                    </div>
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Test Steps */}
           <div className="space-y-4">
@@ -867,7 +1009,7 @@ export default function EditTestCasePage() {
                     <Loader2 className="h-4 w-4 animate-spin" />
                     <span>Executing steps...</span>
                   </div>
-                  {steps.map((step, index) => {
+                  {executionSteps.map((step, index) => {
                     const isVisible = index <= visibleStepIndex;
                     const isCurrent = index === visibleStepIndex;
                     return (
@@ -889,9 +1031,16 @@ export default function EditTestCasePage() {
                           )}
                         </div>
                         <div className="flex-1 min-w-0">
-                          <span className="text-xs px-1.5 py-0.5 rounded bg-primary/10 text-primary font-medium">
-                            {step.action}
-                          </span>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs px-1.5 py-0.5 rounded bg-primary/10 text-primary font-medium">
+                              {step.action}
+                            </span>
+                            {step.isFixture && step.fixtureName && (
+                              <span className="text-xs px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-500">
+                                {step.fixtureName}
+                              </span>
+                            )}
+                          </div>
                           <p className="text-sm mt-1">{step.description}</p>
                         </div>
                       </div>
@@ -922,7 +1071,8 @@ export default function EditTestCasePage() {
                       key={step.step_number}
                       className={cn(
                         "flex items-start gap-3 p-3 rounded-lg",
-                        step.status === "failed" ? "bg-red-500/5" : "bg-muted"
+                        step.status === "failed" ? "bg-red-500/5" :
+                        step.fixture_name ? "bg-blue-500/5 border-l-2 border-blue-500" : "bg-muted"
                       )}
                     >
                       <div className="pt-0.5">
@@ -937,6 +1087,11 @@ export default function EditTestCasePage() {
                           <span className="text-xs px-1.5 py-0.5 rounded bg-primary/10 text-primary font-medium">
                             {step.action}
                           </span>
+                          {step.fixture_name && (
+                            <span className="text-xs px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-500">
+                              {step.fixture_name}
+                            </span>
+                          )}
                           <span className="text-xs text-muted-foreground">
                             {step.duration}ms
                           </span>

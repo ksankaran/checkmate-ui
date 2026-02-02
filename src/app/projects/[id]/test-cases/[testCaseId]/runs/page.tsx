@@ -46,6 +46,7 @@ interface RunStep {
   duration: number | null;
   error: string | null;
   screenshot: string | null;
+  fixture_name: string | null;
   attempt?: number;
   max_attempts?: number;
 }
@@ -390,6 +391,7 @@ export default function TestCaseRunsPage() {
                     duration: null,
                     error: null,
                     screenshot: null,
+                    fixture_name: data.fixture_name || null,
                     attempt: data.attempt,
                     max_attempts: data.max_attempts,
                   };
@@ -422,6 +424,7 @@ export default function TestCaseRunsPage() {
                     duration: data.duration,
                     error: data.error,
                     screenshot: data.screenshot || null,
+                    fixture_name: data.fixture_name || null,
                     attempt: data.attempt,
                     max_attempts: data.max_attempts,
                   };
@@ -888,6 +891,8 @@ export default function TestCaseRunsPage() {
                                       ? "bg-red-500/5"
                                       : displayStatus === "running"
                                       ? "bg-primary/5 border border-primary/20"
+                                      : step.fixture_name
+                                      ? "bg-blue-500/5 border-l-2 border-blue-500"
                                       : "bg-background"
                                   )}
                                 >
@@ -899,6 +904,11 @@ export default function TestCaseRunsPage() {
                                       <span className="text-xs px-1.5 py-0.5 rounded bg-primary/10 text-primary font-medium">
                                         {ACTION_LABELS[step.action] || step.action}
                                       </span>
+                                      {step.fixture_name && (
+                                        <span className="text-xs px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-500">
+                                          {step.fixture_name}
+                                        </span>
+                                      )}
                                       {displayStatus !== "pending" && displayStatus !== "running" && (
                                         <span className="text-xs text-muted-foreground">
                                           {formatDuration(step.duration)}

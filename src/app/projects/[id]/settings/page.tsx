@@ -29,6 +29,7 @@ import {
   Send,
 } from "lucide-react";
 import { ThemeToggle } from "@/components/dashboard/ThemeToggle";
+import { FixturesTab } from "@/components/fixtures/FixturesTab";
 import { API_URL } from "@/lib/api";
 
 interface Project {
@@ -100,7 +101,7 @@ interface TestCase {
   tags: string | null;
 }
 
-type Tab = "general" | "context" | "personas" | "pages" | "notifications" | "schedules";
+type Tab = "general" | "context" | "personas" | "pages" | "fixtures" | "notifications" | "schedules";
 
 interface PersonaFormData {
   name: string;
@@ -1065,6 +1066,17 @@ export default function ProjectSettingsPage() {
             Pages
           </button>
           <button
+            onClick={() => setActiveTab("fixtures")}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${
+              activeTab === "fixtures"
+                ? "bg-primary text-primary-foreground"
+                : "bg-muted hover:bg-muted/80"
+            }`}
+          >
+            <Clock className="h-4 w-4" />
+            Fixtures
+          </button>
+          <button
             onClick={() => setActiveTab("notifications")}
             className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${
               activeTab === "notifications"
@@ -1444,6 +1456,10 @@ Examples:
                 </div>
               )}
             </motion.div>
+          )}
+
+          {activeTab === "fixtures" && (
+            <FixturesTab projectId={projectId} />
           )}
 
           {activeTab === "notifications" && (

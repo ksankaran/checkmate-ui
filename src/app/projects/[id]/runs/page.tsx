@@ -36,6 +36,7 @@ interface RunStep {
   duration: number | null;
   error: string | null;
   screenshot: string | null;
+  fixture_name: string | null;
 }
 
 interface TestRun {
@@ -584,7 +585,8 @@ function RunCard({
                   key={step.id}
                   className={cn(
                     "flex items-start gap-3 p-3 rounded-lg",
-                    step.status === "failed" ? "bg-red-500/5" : "bg-background"
+                    step.status === "failed" ? "bg-red-500/5" :
+                    step.fixture_name ? "bg-blue-500/5 border-l-2 border-blue-500" : "bg-background"
                   )}
                 >
                   <div className="pt-0.5">{getStatusIcon(step.status, "sm")}</div>
@@ -593,6 +595,11 @@ function RunCard({
                       <span className="text-xs px-1.5 py-0.5 rounded bg-primary/10 text-primary font-medium">
                         {ACTION_LABELS[step.action] || step.action}
                       </span>
+                      {step.fixture_name && (
+                        <span className="text-xs px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-500">
+                          {step.fixture_name}
+                        </span>
+                      )}
                       <span className="text-xs text-muted-foreground">
                         {formatDuration(step.duration)}
                       </span>

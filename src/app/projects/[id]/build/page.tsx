@@ -61,6 +61,14 @@ interface Project {
   base_url: string;
 }
 
+interface Fixture {
+  id: number;
+  name: string;
+  description: string | null;
+  scope: string;
+  has_valid_cache: boolean;
+}
+
 interface UserMessage {
   id: string;
   content: string;
@@ -82,6 +90,10 @@ export default function BuildTestCasePage() {
   const [tags, setTags] = useState("");
   const [steps, setSteps] = useState<TestStep[]>([]);
 
+  // Fixtures
+  const [fixtures, setFixtures] = useState<Fixture[]>([]);
+  const [selectedFixtureIds, setSelectedFixtureIds] = useState<number[]>([]);
+
   // Message state
   const [userMessages, setUserMessages] = useState<UserMessage[]>([]);
   const [input, setInput] = useState("");
@@ -101,7 +113,20 @@ export default function BuildTestCasePage() {
 
   useEffect(() => {
     fetchProject();
+    fetchFixtures();
   }, [projectId]);
+
+  async function fetchFixtures() {
+    try {
+      const res = await fetch(`${API_URL}/api/projects/${projectId}/fixtures`);
+      if (res.ok) {
+        const data = await res.json();
+        setFixtures(data);
+      }
+    } catch (error) {
+      console.error("Failed to fetch fixtures:", error);
+    }
+  }
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -193,6 +218,10 @@ export default function BuildTestCasePage() {
             description: s.description || "",
           }))
         );
+        // Update selected fixtures from AI response
+        if (data.test_case.fixture_ids && data.test_case.fixture_ids.length > 0) {
+          setSelectedFixtureIds(data.test_case.fixture_ids);
+        }
       }
 
       // Show agent message if any
@@ -285,6 +314,7 @@ export default function BuildTestCasePage() {
           value: s.value || null,
           description: s.description,
         }))),
+        fixture_ids: selectedFixtureIds.length > 0 ? JSON.stringify(selectedFixtureIds) : null,
       };
 
       const res = await fetch(
@@ -415,6 +445,55 @@ export default function BuildTestCasePage() {
                 </div>
               </div>
             </div>
+
+            {/* Fixtures */}
+            {fixtures.length > 0 && (
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <h2 className="text-sm font-medium text-muted-foreground uppercase tracking-wider">
+                    Fixtures {selectedFixtureIds.length > 0 && `(${selectedFixtureIds.length} selected)`}
+                  </h2>
+                  <Link
+                    href={`/projects/${projectId}/settings`}
+                    className="text-sm text-primary hover:underline"
+                  >
+                    Manage
+                  </Link>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {fixtures.map((fixture) => {
+                    const isSelected = selectedFixtureIds.includes(fixture.id);
+                    return (
+                      <button
+                        key={fixture.id}
+                        type="button"
+                        onClick={() => {
+                          setSelectedFixtureIds((prev) =>
+                            isSelected
+                              ? prev.filter((id) => id !== fixture.id)
+                              : [...prev, fixture.id]
+                          );
+                        }}
+                        className={cn(
+                          "px-3 py-1.5 rounded-lg text-sm border transition-colors",
+                          isSelected
+                            ? "border-primary bg-primary/10 text-primary"
+                            : "border-border hover:border-primary/50"
+                        )}
+                      >
+                        {fixture.name}
+                        {isSelected && " ✓"}
+                      </button>
+                    );
+                  })}
+                </div>
+                {selectedFixtureIds.length > 0 && (
+                  <p className="text-xs text-muted-foreground">
+                    Selected fixtures will run before test steps.
+                  </p>
+                )}
+              </div>
+            )}
 
             {/* Test Steps */}
             <div className="space-y-4">
