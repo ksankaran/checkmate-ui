@@ -33,6 +33,7 @@ const VALID_ACTIONS = [
   { value: "assert_text", label: "Assert Text", hasTarget: false, hasValue: true, valueHint: "Expected text" },
   { value: "assert_element", label: "Assert Element", hasTarget: true, hasValue: false, targetHint: "Element description" },
   { value: "assert_style", label: "Assert Style", hasTarget: true, hasValue: true, targetHint: "Element", valueHint: '{"property": "color", "expected": "red"}' },
+  { value: "assert_url", label: "Assert URL", hasTarget: false, hasValue: true, valueHint: "Regex pattern" },
   { value: "back", label: "Go Back", hasTarget: false, hasValue: false },
   { value: "evaluate", label: "Evaluate JS", hasTarget: false, hasValue: true, valueHint: "JavaScript code" },
   { value: "upload", label: "Upload File", hasTarget: false, hasValue: true, valueHint: "File path" },

@@ -81,6 +81,7 @@ const ACTION_LABELS: Record<string, string> = {
   assert_text: "Assert Text",
   assert_element: "Assert Element",
   assert_style: "Assert Style",
+  assert_url: "Assert URL",
   back: "Go Back",
   evaluate: "Evaluate JS",
   upload: "Upload",
