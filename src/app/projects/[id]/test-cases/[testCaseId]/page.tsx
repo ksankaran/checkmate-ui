@@ -16,6 +16,8 @@ import {
   ChevronDown,
   RefreshCw,
   Layers,
+  Database,
+  Zap,
 } from "lucide-react";
 import { ThemeToggle } from "@/components/dashboard/ThemeToggle";
 import { cn } from "@/lib/utils";
@@ -46,6 +48,8 @@ interface Fixture {
   id: number;
   name: string;
   description: string | null;
+  scope: string;
+  has_valid_cache: boolean;
 }
 
 interface Project {
@@ -499,10 +503,16 @@ export default function TestCaseDetailPage() {
               {getAssociatedFixtures().map((fixture) => (
                 <span
                   key={fixture.id}
-                  className="text-xs px-2 py-1 rounded bg-blue-500/10 text-blue-500 border border-blue-500/20"
+                  className="inline-flex items-center gap-1.5 text-xs px-2 py-1 rounded bg-blue-500/10 text-blue-500 border border-blue-500/20"
                   title={fixture.description || undefined}
                 >
                   {fixture.name}
+                  {fixture.scope === "cached" && (
+                    <Database className="h-3 w-3" />
+                  )}
+                  {fixture.scope === "cached" && fixture.has_valid_cache && (
+                    <Zap className="h-3 w-3 text-green-500" />
+                  )}
                 </span>
               ))}
             </div>

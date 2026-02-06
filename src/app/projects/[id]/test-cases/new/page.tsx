@@ -11,6 +11,8 @@ import {
   GripVertical,
   ChevronDown,
   CheckCircle,
+  Database,
+  Zap,
 } from "lucide-react";
 import { ThemeToggle } from "@/components/dashboard/ThemeToggle";
 import { cn } from "@/lib/utils";
@@ -327,17 +329,17 @@ export default function NewTestCasePage() {
                     <div className="flex-1">
                       <div className="flex items-center gap-2">
                         <span className="font-medium">{fixture.name}</span>
-                        <span
-                          className={`text-xs px-2 py-0.5 rounded ${
-                            fixture.scope === "cached"
-                              ? "bg-blue-500/20 text-blue-500"
-                              : "bg-orange-500/20 text-orange-500"
-                          }`}
-                        >
-                          {fixture.scope}
-                        </span>
+                        {fixture.scope === "cached" && (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-blue-500/10 text-blue-500 border border-blue-500/20">
+                            <Database className="h-3 w-3" />
+                            Cached
+                          </span>
+                        )}
                         {fixture.scope === "cached" && fixture.has_valid_cache && (
-                          <CheckCircle className="h-3 w-3 text-green-500" />
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-green-500/10 text-green-500 border border-green-500/20">
+                            <Zap className="h-3 w-3" />
+                            Active
+                          </span>
                         )}
                       </div>
                       {fixture.description && (

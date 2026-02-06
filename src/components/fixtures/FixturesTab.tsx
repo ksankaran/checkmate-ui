@@ -17,6 +17,8 @@ import {
   GripVertical,
   ChevronDown,
   Square,
+  Database,
+  Zap,
 } from "lucide-react";
 import { API_URL } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -672,6 +674,18 @@ export function FixturesTab({ projectId }: FixturesTabProps) {
                 <div className="flex-1">
                   <div className="flex items-center gap-2">
                     <h3 className="font-medium">{fixture.name}</h3>
+                    {fixture.scope === "cached" && (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-blue-500/10 text-blue-500 border border-blue-500/20">
+                        <Database className="h-3 w-3" />
+                        Cached
+                      </span>
+                    )}
+                    {fixture.scope === "cached" && fixture.has_valid_cache && (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-green-500/10 text-green-500 border border-green-500/20">
+                        <Zap className="h-3 w-3" />
+                        Active
+                      </span>
+                    )}
                   </div>
                   {fixture.description && (
                     <p className="text-sm text-muted-foreground mt-1">
@@ -680,6 +694,16 @@ export function FixturesTab({ projectId }: FixturesTabProps) {
                   )}
                   <div className="flex items-center gap-4 mt-2 text-sm text-muted-foreground">
                     <span>{getStepsCount(fixture.setup_steps)} steps</span>
+                    {fixture.scope === "cached" && (
+                      <span>
+                        TTL: {Math.floor(fixture.cache_ttl_seconds / 60)}m
+                        {fixture.cache_expires_at && (
+                          <span className="ml-1 text-xs">
+                            (expires {new Date(fixture.cache_expires_at).toLocaleTimeString()})
+                          </span>
+                        )}
+                      </span>
+                    )}
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
@@ -816,6 +840,46 @@ export function FixturesTab({ projectId }: FixturesTabProps) {
                         className="w-full px-3 py-2 rounded-lg border border-border bg-background focus:outline-none focus:ring-2 focus:ring-primary"
                       />
                     </div>
+                  </div>
+
+                  {/* Scope and TTL */}
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium mb-1">
+                        Scope <span className="text-red-500">*</span>
+                      </label>
+                      <select
+                        value={scope}
+                        onChange={(e) => setScope(e.target.value)}
+                        className="w-full px-3 py-2 rounded-lg border border-border bg-background focus:outline-none focus:ring-2 focus:ring-primary"
+                      >
+                        <option value="test">Test - Fresh setup every run</option>
+                        <option value="cached">Cached - Reuse state until TTL expires</option>
+                      </select>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        {scope === "test" 
+                          ? "Fixture runs fresh for every test (no caching)"
+                          : "Browser state is cached and reused until TTL expires"}
+                      </p>
+                    </div>
+                    {scope === "cached" && (
+                      <div>
+                        <label className="block text-sm font-medium mb-1">
+                          Cache TTL (minutes)
+                        </label>
+                        <input
+                          type="number"
+                          value={Math.floor(cacheTtl / 60)}
+                          onChange={(e) => setCacheTtl(Math.max(1, parseInt(e.target.value) || 1) * 60)}
+                          min="1"
+                          placeholder="30"
+                          className="w-full px-3 py-2 rounded-lg border border-border bg-background focus:outline-none focus:ring-2 focus:ring-primary"
+                        />
+                        <p className="text-xs text-muted-foreground mt-1">
+                          How long to keep cached browser state (default: 60 minutes)
+                        </p>
+                      </div>
+                    )}
                   </div>
 
                   {/* Setup Steps */}
