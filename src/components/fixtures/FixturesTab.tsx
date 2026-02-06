@@ -370,8 +370,32 @@ export function FixturesTab({ projectId }: FixturesTabProps) {
       );
 
       if (res.ok) {
-        setShowModal(false);
-        fetchFixtures();
+        const data = await res.json();
+        // Switch to create/edit mode with the generated steps
+        setModalMode("create");
+        setName(data.name || "");
+        setDescription(data.description || "");
+        setScope(data.scope || "cached");
+        setCacheTtl(data.cache_ttl_seconds || 3600);
+        
+        // Parse and set generated steps
+        try {
+          const generatedSteps = typeof data.setup_steps === "string" 
+            ? JSON.parse(data.setup_steps) 
+            : data.setup_steps;
+          setSteps(generatedSteps.map((step: any) => ({
+            id: crypto.randomUUID(),
+            action: step.action || "click",
+            target: step.target || "",
+            value: step.value || "",
+            description: step.description || "",
+          })));
+        } catch {
+          setSteps([{ id: crypto.randomUUID(), action: "click", target: "", value: "", description: "" }]);
+        }
+        
+        // Keep modal open for review
+        setGeneratePrompt("");
       } else {
         const err = await res.json();
         alert(err.detail || "Failed to generate fixture");
