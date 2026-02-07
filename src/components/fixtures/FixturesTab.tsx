@@ -99,6 +99,13 @@ export function FixturesTab({ projectId }: FixturesTabProps) {
   const [saving, setSaving] = useState(false);
   const [previewing, setPreviewing] = useState<number | null>(null);
   const [clearingCache, setClearingCache] = useState<number | null>(null);
+  
+  // Preview modal state
+  const [showPreviewModal, setShowPreviewModal] = useState(false);
+  const [previewProgress, setPreviewProgress] = useState(0);
+  const [previewTotalSteps, setPreviewTotalSteps] = useState(0);
+  const [previewResult, setPreviewResult] = useState<ExecutionResult | null>(null);
+  const [previewSteps, setPreviewSteps] = useState<ExecutionStepResult[]>([]);
 
   // Form state
   const [name, setName] = useState("");
@@ -431,7 +438,24 @@ export function FixturesTab({ projectId }: FixturesTabProps) {
   }
 
   async function handlePreviewFixture(fixture: Fixture) {
+    // Parse steps to get total count
+    let totalSteps = 0;
+    try {
+      const parsedSteps = JSON.parse(fixture.setup_steps);
+      totalSteps = parsedSteps.length;
+    } catch {
+      totalSteps = 0;
+    }
+
     setPreviewing(fixture.id);
+    setShowPreviewModal(true);
+    setPreviewProgress(0);
+    setPreviewTotalSteps(totalSteps);
+    setPreviewResult(null);
+    setPreviewSteps([]);
+
+    const results: ExecutionStepResult[] = [];
+
     try {
       const res = await fetch(`${API_URL}/api/fixtures/${fixture.id}/preview`, {
         method: "POST",
@@ -440,12 +464,18 @@ export function FixturesTab({ projectId }: FixturesTabProps) {
       if (!res.ok) {
         const err = await res.json();
         alert(err.detail || "Failed to preview fixture");
+        setPreviewing(null);
+        setShowPreviewModal(false);
         return;
       }
 
       // Read SSE stream
       const reader = res.body?.getReader();
-      if (!reader) return;
+      if (!reader) {
+        setPreviewing(null);
+        setShowPreviewModal(false);
+        return;
+      }
 
       const decoder = new TextDecoder();
       let buffer = "";
@@ -462,12 +492,30 @@ export function FixturesTab({ projectId }: FixturesTabProps) {
           if (line.startsWith("data: ")) {
             try {
               const event = JSON.parse(line.slice(6));
-              if (event.type === "completed") {
-                if (event.status === "passed") {
-                  alert("Fixture preview completed successfully!");
-                } else {
-                  alert(`Fixture preview failed: ${event.summary}`);
-                }
+              
+              if (event.type === "step_completed") {
+                const stepResult: ExecutionStepResult = {
+                  step_number: event.step_number,
+                  action: event.action,
+                  target: event.target || null,
+                  value: event.value || null,
+                  description: event.description,
+                  status: event.status,
+                  duration: event.duration,
+                  error: event.error,
+                  screenshot: event.screenshot || null,
+                };
+                results.push(stepResult);
+                setPreviewSteps([...results]);
+                setPreviewProgress(results.length);
+              } else if (event.type === "completed") {
+                setPreviewResult({
+                  status: event.status,
+                  pass_count: event.pass_count || 0,
+                  error_count: event.error_count || 0,
+                  steps: results,
+                  summary: event.summary || "",
+                });
               }
             } catch {
               // Ignore parse errors
@@ -1203,6 +1251,132 @@ export function FixturesTab({ projectId }: FixturesTabProps) {
                     ? "Create"
                     : "Save"}
                 </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Preview Progress Modal */}
+      <AnimatePresence>
+        {showPreviewModal && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-card border border-border rounded-lg p-6 max-w-md w-full"
+            >
+              <div className="text-center">
+                <h3 className="text-lg font-semibold mb-6">
+                  {previewResult ? "Preview Complete" : "Running Preview"}
+                </h3>
+
+                {/* Progress Circle */}
+                {!previewResult && (
+                  <div className="relative w-32 h-32 mx-auto mb-6">
+                    <svg className="transform -rotate-90 w-32 h-32">
+                      {/* Background circle */}
+                      <circle
+                        cx="64"
+                        cy="64"
+                        r="56"
+                        stroke="currentColor"
+                        strokeWidth="8"
+                        fill="none"
+                        className="text-muted"
+                      />
+                      {/* Progress circle */}
+                      <circle
+                        cx="64"
+                        cy="64"
+                        r="56"
+                        stroke="currentColor"
+                        strokeWidth="8"
+                        fill="none"
+                        strokeDasharray={2 * Math.PI * 56}
+                        strokeDashoffset={
+                          2 * Math.PI * 56 * (1 - (previewTotalSteps > 0 ? previewProgress / previewTotalSteps : 0))
+                        }
+                        className="text-green-500 transition-all duration-300"
+                        strokeLinecap="round"
+                      />
+                    </svg>
+                    <div className="absolute inset-0 flex items-center justify-center">
+                      <div className="text-center">
+                        <div className="text-2xl font-bold">
+                          {previewTotalSteps > 0 
+                            ? Math.round((previewProgress / previewTotalSteps) * 100)
+                            : 0}%
+                        </div>
+                        <div className="text-xs text-muted-foreground mt-1">
+                          {previewProgress}/{previewTotalSteps}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Result Summary */}
+                {previewResult && (
+                  <div className="mb-6">
+                    <div className="flex items-center justify-center gap-2 mb-3">
+                      {previewResult.status === "passed" ? (
+                        <CheckCircle className="h-8 w-8 text-green-500" />
+                      ) : (
+                        <XCircle className="h-8 w-8 text-red-500" />
+                      )}
+                      <span className={cn(
+                        "text-lg font-medium",
+                        previewResult.status === "passed" ? "text-green-500" : "text-red-500"
+                      )}>
+                        {previewResult.status === "passed" ? "Success" : "Failed"}
+                      </span>
+                    </div>
+                    <p className="text-sm text-muted-foreground">
+                      {previewResult.pass_count} passed, {previewResult.error_count} failed
+                    </p>
+                    {previewResult.summary && (
+                      <p className="text-sm text-muted-foreground mt-2">
+                        {previewResult.summary}
+                      </p>
+                    )}
+
+                    {/* Show failed steps */}
+                    {previewResult.error_count > 0 && (
+                      <div className="mt-4 text-left max-h-40 overflow-y-auto">
+                        <p className="text-sm font-medium mb-2">Failed Steps:</p>
+                        {previewSteps.filter(s => s.status === "failed").map((step) => (
+                          <div key={step.step_number} className="text-sm p-2 bg-red-500/10 rounded mb-2">
+                            <div className="font-medium text-red-500">
+                              Step {step.step_number}: {step.description}
+                            </div>
+                            {step.error && (
+                              <div className="text-xs text-muted-foreground mt-1">
+                                {step.error}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Close button (only show when complete) */}
+                {previewResult && (
+                  <button
+                    onClick={() => {
+                      setShowPreviewModal(false);
+                      setPreviewResult(null);
+                      setPreviewSteps([]);
+                      setPreviewProgress(0);
+                    }}
+                    className="px-4 py-2 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+                  >
+                    Close
+                  </button>
+                )}
               </div>
             </motion.div>
           </div>
