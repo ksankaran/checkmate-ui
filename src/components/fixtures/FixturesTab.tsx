@@ -1345,7 +1345,7 @@ export function FixturesTab({ projectId }: FixturesTabProps) {
                     </div>
 
                     {/* Duration */}
-                    {step.duration !== undefined && (
+                    {step.duration !== undefined && step.duration !== null && (
                       <span className="text-xs text-muted-foreground whitespace-nowrap">
                         {(step.duration / 1000).toFixed(2)}s
                       </span>
