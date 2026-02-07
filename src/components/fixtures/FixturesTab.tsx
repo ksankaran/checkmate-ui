@@ -1270,119 +1270,119 @@ export function FixturesTab({ projectId }: FixturesTabProps) {
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.95 }}
-              className="bg-card border border-border rounded-lg p-6 max-w-md w-full"
+              className="bg-card border border-border rounded-lg p-6 max-w-2xl w-full max-h-[80vh] flex flex-col"
             >
-              <div className="text-center">
-                <h3 className="text-lg font-semibold mb-6">
-                  {previewResult ? "Preview Complete" : "Running Preview"}
-                </h3>
+              <h3 className="text-lg font-semibold mb-4">
+                {previewResult ? "Preview Complete" : "Running Preview"}
+              </h3>
 
-                {/* Progress Circle */}
-                {!previewResult && (
-                  <div className="relative w-32 h-32 mx-auto mb-6">
-                    <svg className="transform -rotate-90 w-32 h-32">
-                      {/* Background circle */}
-                      <circle
-                        cx="64"
-                        cy="64"
-                        r="56"
-                        stroke="currentColor"
-                        strokeWidth="8"
-                        fill="none"
-                        className="text-muted"
-                      />
-                      {/* Progress circle */}
-                      <circle
-                        cx="64"
-                        cy="64"
-                        r="56"
-                        stroke="currentColor"
-                        strokeWidth="8"
-                        fill="none"
-                        strokeDasharray={2 * Math.PI * 56}
-                        strokeDashoffset={
-                          2 * Math.PI * 56 * (1 - (previewTotalSteps > 0 ? previewProgress / previewTotalSteps : 0))
-                        }
-                        className="text-green-500 transition-all duration-300"
-                        strokeLinecap="round"
-                      />
-                    </svg>
-                    <div className="absolute inset-0 flex items-center justify-center">
-                      <div className="text-center">
-                        <div className="text-2xl font-bold">
-                          {previewTotalSteps > 0 
-                            ? Math.round((previewProgress / previewTotalSteps) * 100)
-                            : 0}%
-                        </div>
-                        <div className="text-xs text-muted-foreground mt-1">
-                          {previewProgress}/{previewTotalSteps}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* Result Summary */}
-                {previewResult && (
-                  <div className="mb-6">
-                    <div className="flex items-center justify-center gap-2 mb-3">
-                      {previewResult.status === "passed" ? (
-                        <CheckCircle className="h-8 w-8 text-green-500" />
-                      ) : (
-                        <XCircle className="h-8 w-8 text-red-500" />
-                      )}
-                      <span className={cn(
-                        "text-lg font-medium",
-                        previewResult.status === "passed" ? "text-green-500" : "text-red-500"
-                      )}>
-                        {previewResult.status === "passed" ? "Success" : "Failed"}
-                      </span>
-                    </div>
-                    <p className="text-sm text-muted-foreground">
-                      {previewResult.pass_count} passed, {previewResult.error_count} failed
-                    </p>
-                    {previewResult.summary && (
-                      <p className="text-sm text-muted-foreground mt-2">
-                        {previewResult.summary}
-                      </p>
+              {/* Steps List */}
+              <div className="flex-1 overflow-y-auto mb-4 space-y-2">
+                {previewSteps.map((step) => (
+                  <div
+                    key={step.step_number}
+                    className={cn(
+                      "flex items-start gap-3 p-3 rounded-lg border",
+                      step.status === "passed" && "bg-green-500/10 border-green-500/30",
+                      step.status === "failed" && "bg-red-500/10 border-red-500/30",
                     )}
-
-                    {/* Show failed steps */}
-                    {previewResult.error_count > 0 && (
-                      <div className="mt-4 text-left max-h-40 overflow-y-auto">
-                        <p className="text-sm font-medium mb-2">Failed Steps:</p>
-                        {previewSteps.filter(s => s.status === "failed").map((step) => (
-                          <div key={step.step_number} className="text-sm p-2 bg-red-500/10 rounded mb-2">
-                            <div className="font-medium text-red-500">
-                              Step {step.step_number}: {step.description}
-                            </div>
-                            {step.error && (
-                              <div className="text-xs text-muted-foreground mt-1">
-                                {step.error}
-                              </div>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* Close button (only show when complete) */}
-                {previewResult && (
-                  <button
-                    onClick={() => {
-                      setShowPreviewModal(false);
-                      setPreviewResult(null);
-                      setPreviewSteps([]);
-                      setPreviewProgress(0);
-                    }}
-                    className="px-4 py-2 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
                   >
-                    Close
-                  </button>
-                )}
+                    {/* Status Icon */}
+                    <div className="mt-0.5">
+                      {step.status === "passed" ? (
+                        <CheckCircle className="h-5 w-5 text-green-500" />
+                      ) : step.status === "failed" ? (
+                        <XCircle className="h-5 w-5 text-red-500" />
+                      ) : (
+                        <div className="h-5 w-5 rounded-full border-2 border-muted" />
+                      )}
+                    </div>
+
+                    {/* Step Info */}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-medium">
+                          Step {step.step_number}
+                        </span>
+                        <span className="text-xs text-muted-foreground">
+                          {step.action}
+                        </span>
+                      </div>
+                      <p className="text-sm text-muted-foreground mt-1">
+                        {step.description}
+                      </p>
+                      {step.error && (
+                        <p className="text-xs text-red-500 mt-1">
+                          {step.error}
+                        </p>
+                      )}
+                    </div>
+
+                    {/* Duration */}
+                    {step.duration !== undefined && (
+                      <span className="text-xs text-muted-foreground whitespace-nowrap">
+                        {(step.duration / 1000).toFixed(2)}s
+                      </span>
+                    )}
+                  </div>
+                ))}
+                
+                {/* Show placeholder for remaining steps */}
+                {!previewResult && previewTotalSteps > previewSteps.length && 
+                  Array.from({ length: previewTotalSteps - previewSteps.length }).map((_, i) => (
+                    <div
+                      key={`pending-${i}`}
+                      className="flex items-start gap-3 p-3 rounded-lg border border-border bg-muted/30"
+                    >
+                      <div className="mt-0.5">
+                        <div className="h-5 w-5 rounded-full border-2 border-muted" />
+                      </div>
+                      <div className="flex-1">
+                        <span className="text-sm text-muted-foreground">
+                          Step {previewSteps.length + i + 1}
+                        </span>
+                      </div>
+                    </div>
+                  ))
+                }
               </div>
+
+              {/* Result Summary */}
+              {previewResult && (
+                <div className="border-t pt-4">
+                  <div className="flex items-center justify-center gap-2">
+                    {previewResult.status === "passed" ? (
+                      <CheckCircle className="h-6 w-6 text-green-500" />
+                    ) : (
+                      <XCircle className="h-6 w-6 text-red-500" />
+                    )}
+                    <span className={cn(
+                      "font-medium",
+                      previewResult.status === "passed" ? "text-green-500" : "text-red-500"
+                    )}>
+                      {previewResult.status === "passed" ? "Success" : "Failed"}
+                    </span>
+                    <span className="text-sm text-muted-foreground">
+                      ({previewResult.pass_count} passed, {previewResult.error_count} failed)
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              {/* Close button (only show when complete) */}
+              {previewResult && (
+                <button
+                  onClick={() => {
+                    setShowPreviewModal(false);
+                    setPreviewResult(null);
+                    setPreviewSteps([]);
+                    setPreviewProgress(0);
+                  }}
+                  className="mt-4 w-full px-4 py-2 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+                >
+                  Close
+                </button>
+              )}
             </motion.div>
           </div>
         )}
