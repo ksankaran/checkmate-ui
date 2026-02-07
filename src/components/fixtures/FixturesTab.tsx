@@ -516,6 +516,11 @@ export function FixturesTab({ projectId }: FixturesTabProps) {
                   steps: results,
                   summary: event.summary || "",
                 });
+                
+                // Refresh fixtures list to update cache status
+                if (event.status === "passed") {
+                  fetchFixtures();
+                }
               }
             } catch {
               // Ignore parse errors
