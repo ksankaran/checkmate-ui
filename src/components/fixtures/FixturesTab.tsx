@@ -438,10 +438,11 @@ export function FixturesTab({ projectId }: FixturesTabProps) {
   }
 
   async function handlePreviewFixture(fixture: Fixture) {
-    // Parse steps to get total count
+    // Parse steps to get total count and descriptions
     let totalSteps = 0;
+    let parsedSteps: any[] = [];
     try {
-      const parsedSteps = JSON.parse(fixture.setup_steps);
+      parsedSteps = JSON.parse(fixture.setup_steps);
       totalSteps = parsedSteps.length;
     } catch {
       totalSteps = 0;
@@ -452,12 +453,25 @@ export function FixturesTab({ projectId }: FixturesTabProps) {
     setPreviewProgress(0);
     setPreviewTotalSteps(totalSteps);
     setPreviewResult(null);
-    setPreviewSteps([]);
+    
+    // Pre-populate steps with descriptions from fixture
+    const initialSteps: ExecutionStepResult[] = parsedSteps.map((step, idx) => ({
+      step_number: idx + 1,
+      action: step.action,
+      target: step.target || null,
+      value: step.value || null,
+      description: step.description || `${step.action} ${step.target || ''}`,
+      status: "pending" as const,
+      duration: 0,
+      error: null,
+      screenshot: null,
+    }));
+    setPreviewSteps(initialSteps);
 
     const results: ExecutionStepResult[] = [];
 
     try {
-      const res = await fetch(`${API_URL}/api/fixtures/${fixture.id}/preview`, {
+      const res = await fetch(`${API_URL}/api/fixtures/${fixture.id}/preview?browser=chromium-headless`, {
         method: "POST",
       });
 
@@ -506,7 +520,19 @@ export function FixturesTab({ projectId }: FixturesTabProps) {
                   screenshot: event.screenshot || null,
                 };
                 results.push(stepResult);
-                setPreviewSteps([...results]);
+                
+                // Update the step at the correct index
+                setPreviewSteps(prev => {
+                  const updated = [...prev];
+                  const idx = event.step_number - 1;
+                  if (idx >= 0 && idx < updated.length) {
+                    updated[idx] = stepResult;
+                  } else {
+                    // If it's a new step (like capture_state), append it
+                    updated.push(stepResult);
+                  }
+                  return updated;
+                });
                 setPreviewProgress(results.length);
               } else if (event.type === "completed") {
                 setPreviewResult({
@@ -1326,25 +1352,6 @@ export function FixturesTab({ projectId }: FixturesTabProps) {
                     )}
                   </div>
                 ))}
-                
-                {/* Show placeholder for remaining steps */}
-                {!previewResult && previewTotalSteps > previewSteps.length && 
-                  Array.from({ length: previewTotalSteps - previewSteps.length }).map((_, i) => (
-                    <div
-                      key={`pending-${i}`}
-                      className="flex items-start gap-3 p-3 rounded-lg border border-border bg-muted/30"
-                    >
-                      <div className="mt-0.5">
-                        <div className="h-5 w-5 rounded-full border-2 border-muted" />
-                      </div>
-                      <div className="flex-1">
-                        <span className="text-sm text-muted-foreground">
-                          Step {previewSteps.length + i + 1}
-                        </span>
-                      </div>
-                    </div>
-                  ))
-                }
               </div>
 
               {/* Result Summary */}
