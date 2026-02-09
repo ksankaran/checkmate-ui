@@ -20,6 +20,7 @@ import {
   RotateCcw,
   Image,
   X,
+  FlaskConical,
 } from "lucide-react";
 import { ThemeToggle } from "@/components/dashboard/ThemeToggle";
 import { cn } from "@/lib/utils";
@@ -57,6 +58,14 @@ interface TestStep {
   error?: string;
 }
 
+interface Fixture {
+  id: number;
+  name: string;
+  description: string | null;
+  scope: string;
+  has_valid_cache: boolean;
+}
+
 interface Project {
   id: number;
   name: string;
@@ -79,6 +88,8 @@ export default function ProjectChatPage() {
 
   // Test steps state
   const [steps, setSteps] = useState<TestStep[]>([]);
+  const [fixtures, setFixtures] = useState<Fixture[]>([]);
+  const [selectedFixtureIds, setSelectedFixtureIds] = useState<number[]>([]);
 
   // Message state
   const [userMessages, setUserMessages] = useState<UserMessage[]>([]);
@@ -100,6 +111,7 @@ export default function ProjectChatPage() {
 
   useEffect(() => {
     fetchProject();
+    fetchFixtures();
   }, [projectId]);
 
   useEffect(() => {
@@ -115,6 +127,18 @@ export default function ProjectChatPage() {
       }
     } catch (error) {
       console.error("Failed to fetch project:", error);
+    }
+  }
+
+  async function fetchFixtures() {
+    try {
+      const res = await fetch(`${API_URL}/api/projects/${projectId}/fixtures`);
+      if (res.ok) {
+        const data = await res.json();
+        setFixtures(data);
+      }
+    } catch (error) {
+      console.error("Failed to fetch fixtures:", error);
     }
   }
 
@@ -190,6 +214,11 @@ export default function ProjectChatPage() {
             status: undefined,
           }))
         );
+      }
+
+      // Update selected fixtures from AI response
+      if (data.test_case?.fixture_ids && data.test_case.fixture_ids.length > 0) {
+        setSelectedFixtureIds(data.test_case.fixture_ids);
       }
 
       // Show agent message if any
@@ -286,6 +315,7 @@ export default function ProjectChatPage() {
             value: s.value || null,
             description: s.description,
           })),
+          fixture_ids: selectedFixtureIds.length > 0 ? selectedFixtureIds : undefined,
         }),
       });
 
@@ -302,6 +332,7 @@ export default function ProjectChatPage() {
       }
 
       let buffer = "";
+      const fixtureStepNumbers = new Set<number>(); // Track fixture step numbers
 
       while (true) {
         const { done, value } = await reader.read();
@@ -317,15 +348,33 @@ export default function ProjectChatPage() {
               const event = JSON.parse(line.slice(6));
 
               if (event.type === "step_started") {
+                // Track fixture steps (they're not in the UI steps array)
+                if (event.fixture_name) {
+                  fixtureStepNumbers.add(event.step_number);
+                  continue;
+                }
+                
                 const stepNum = event.step_number;
+                // Count how many fixture steps came before this step
+                const fixtureStepsBefore = Array.from(fixtureStepNumbers).filter(n => n < stepNum).length;
+                const uiIndex = stepNum - fixtureStepsBefore - 1;
                 setSteps(prev => prev.map((s, idx) =>
-                  idx === stepNum - 1 ? { ...s, status: "running" as const } : s
+                  idx === uiIndex ? { ...s, status: "running" as const } : s
                 ));
               } else if (event.type === "step_completed") {
+                // Track fixture steps (they're not in the UI steps array)
+                if (event.fixture_name) {
+                  fixtureStepNumbers.add(event.step_number);
+                  continue;
+                }
+                
                 const stepNum = event.step_number;
+                // Count how many fixture steps came before this step
+                const fixtureStepsBefore = Array.from(fixtureStepNumbers).filter(n => n < stepNum).length;
+                const uiIndex = stepNum - fixtureStepsBefore - 1;
                 const status = event.status === "passed" ? "passed" : "failed";
                 setSteps(prev => prev.map((s, idx) =>
-                  idx === stepNum - 1 ? {
+                  idx === uiIndex ? {
                     ...s,
                     status: status as "passed" | "failed",
                     screenshot: event.screenshot || undefined,
@@ -460,6 +509,49 @@ export default function ProjectChatPage() {
               </div>
             ) : (
               <div className="space-y-4">
+                {/* Fixtures Section */}
+                {fixtures.length > 0 && (
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <FlaskConical className="h-4 w-4 text-muted-foreground" />
+                        <h2 className="text-sm font-medium text-muted-foreground uppercase tracking-wider">
+                          Fixtures{selectedFixtureIds.length > 0 && ` (${selectedFixtureIds.length} selected)`}
+                        </h2>
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {fixtures.map((fixture) => {
+                        const isSelected = selectedFixtureIds.includes(fixture.id);
+                        return (
+                          <button
+                            key={fixture.id}
+                            onClick={() => {
+                              setSelectedFixtureIds((prev) =>
+                                prev.includes(fixture.id)
+                                  ? prev.filter((id) => id !== fixture.id)
+                                  : [...prev, fixture.id]
+                              );
+                            }}
+                            disabled={isRunning}
+                            className={cn(
+                              "px-3 py-1.5 rounded-lg text-sm font-medium transition-colors",
+                              isSelected
+                                ? "border-2 border-primary bg-primary/10 text-primary"
+                                : "border border-border bg-card hover:bg-muted",
+                              isRunning && "opacity-50 cursor-not-allowed"
+                            )}
+                            title={fixture.description || fixture.name}
+                          >
+                            {fixture.name}
+                            {isSelected && " ✓"}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
                 <div className="flex items-center justify-between">
                   <h2 className="text-sm font-medium text-muted-foreground uppercase tracking-wider">
                     Test Steps ({steps.length})
