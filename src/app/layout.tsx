@@ -5,6 +5,7 @@ import React from "react";
 import { NuqsAdapter } from "nuqs/adapters/next/app";
 import { ThemeProvider } from "next-themes";
 import { Toaster } from "sonner";
+import { AppLayout } from "@/components/layout/AppLayout";
 
 const inter = Inter({
   subsets: ["latin"],
@@ -50,7 +51,9 @@ export default function RootLayout({
           enableSystem
           disableTransitionOnChange={false}
         >
-          <NuqsAdapter>{children}</NuqsAdapter>
+          <NuqsAdapter>
+            <AppLayout>{children}</AppLayout>
+          </NuqsAdapter>
           <Toaster richColors position="bottom-right" />
         </ThemeProvider>
       </body>
