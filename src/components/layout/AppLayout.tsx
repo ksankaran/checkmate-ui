@@ -6,19 +6,22 @@ import { cn } from "@/lib/utils";
 import { Sidebar } from "./Sidebar";
 import { TopBar } from "./TopBar";
 import { SidebarProvider, useSidebarContext } from "@/context/SidebarContext";
+import { EnvironmentProvider, useEnvironment } from "@/context/EnvironmentContext";
 
 function AppLayoutInner({ children }: { children: React.ReactNode }) {
   const params = useParams();
   const { setActiveProjectId, isCollapsed } = useSidebarContext();
+  const { loadEnvironments } = useEnvironment();
 
-  // Sync active project from URL
+  // Sync active project from URL and load its environments
   useEffect(() => {
     const id = params?.id;
     if (id && typeof id === "string") {
       const projectId = parseInt(id, 10);
       setActiveProjectId(projectId);
+      loadEnvironments(projectId);
     }
-  }, [params?.id, setActiveProjectId]);
+  }, [params?.id, setActiveProjectId, loadEnvironments]);
 
   return (
     <div className="min-h-screen bg-background">
@@ -39,7 +42,9 @@ function AppLayoutInner({ children }: { children: React.ReactNode }) {
 export function AppLayout({ children }: { children: React.ReactNode }) {
   return (
     <SidebarProvider>
-      <AppLayoutInner>{children}</AppLayoutInner>
+      <EnvironmentProvider>
+        <AppLayoutInner>{children}</AppLayoutInner>
+      </EnvironmentProvider>
     </SidebarProvider>
   );
 }
