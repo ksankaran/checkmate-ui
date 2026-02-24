@@ -23,10 +23,11 @@ import {
   Clock,
   Power,
   Send,
+  Server,
 } from "lucide-react";
 import { ThemeToggle } from "@/components/dashboard/ThemeToggle";
 import { EnvironmentsTab } from "@/components/environments/EnvironmentsTab";
-
+import { ExecutorTab } from "@/components/executor/ExecutorTab";
 import { API_URL } from "@/lib/api";
 
 interface Project {
@@ -79,7 +80,7 @@ interface TestCase {
   tags: string | null;
 }
 
-type Tab = "general" | "context" | "notifications" | "schedules" | "environments";
+type Tab = "general" | "context" | "notifications" | "schedules" | "environments" | "executor";
 
 interface NotificationFormData {
   name: string;
@@ -158,7 +159,7 @@ export default function ProjectSettingsPage() {
   const projectId = params.id as string;
 
   const [project, setProject] = useState<Project | null>(null);
-  const validTabs: Tab[] = ["general", "context", "notifications", "schedules", "environments"];
+  const validTabs: Tab[] = ["general", "context", "notifications", "schedules", "environments", "executor"];
   const tabParam = searchParams.get("tab") as Tab | null;
   const [activeTab, setActiveTab] = useState<Tab>(
     tabParam && validTabs.includes(tabParam) ? tabParam : "general"
@@ -820,6 +821,17 @@ export default function ProjectSettingsPage() {
             <Globe className="h-4 w-4" />
             Environments
           </button>
+          <button
+            onClick={() => setActiveTab("executor")}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${
+              activeTab === "executor"
+                ? "bg-primary text-primary-foreground"
+                : "bg-muted hover:bg-muted/80"
+            }`}
+          >
+            <Server className="h-4 w-4" />
+            Executor
+          </button>
         </div>
 
         {/* Tab Content */}
@@ -1266,7 +1278,16 @@ Examples:
             <EnvironmentsTab projectId={parseInt(projectId, 10)} />
           )}
 
-
+          {activeTab === "executor" && (
+            <motion.div
+              key="executor"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+            >
+              <ExecutorTab />
+            </motion.div>
+          )}
         </AnimatePresence>
       </main>
 
