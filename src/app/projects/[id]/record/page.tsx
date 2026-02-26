@@ -196,7 +196,13 @@ export default function RecordPage() {
             baseUrl,
           );
           if (refined.steps && refined.steps.length > 0) {
-            refinedSteps = refined.steps.map((s) => ({ ...s, is_credential: false }));
+            refinedSteps = refined.steps.map((s) => ({
+              ...s,
+              is_credential: false,
+              coordinates: s.coordinates ?? null,
+              locators: s.locators ?? null,
+              causes_navigation: s.causes_navigation ?? false,
+            }));
             setEditableSteps(
               refined.steps.map((s) => ({
                 id: crypto.randomUUID(),

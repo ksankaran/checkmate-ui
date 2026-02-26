@@ -113,10 +113,12 @@ export default function ScenariosPage() {
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
 
-  // Browser state
+  // Browser state — selectedBrowser and selectedBrowsers always store BASE ids (e.g. "chromium", never "chromium-headless").
+  // The headless suffix is applied at run-time via headlessMode.
   const [browsers, setBrowsers] = useState<BrowserOption[]>([]);
   const [selectedBrowser, setSelectedBrowser] = useState<string>("");
   const [selectedBrowsers, setSelectedBrowsers] = useState<string[]>([]);
+  const [headlessMode, setHeadlessMode] = useState(false);
   const [batchRunning, setBatchRunning] = useState(false);
   const batchAbortRef = useRef<AbortController | null>(null);
 
@@ -250,9 +252,10 @@ export default function ScenariosPage() {
   // Persist browser selection to localStorage so it survives page navigation
   useEffect(() => {
     if (selectedBrowser) {
-      localStorage.setItem(`checkmate:browser:${projectId}`, selectedBrowser);
+      const fullId = headlessMode ? `${selectedBrowser}-headless` : selectedBrowser;
+      localStorage.setItem(`checkmate:browser:${projectId}`, fullId);
     }
-  }, [selectedBrowser, projectId]);
+  }, [selectedBrowser, headlessMode, projectId]);
 
   useEffect(() => {
     fetchData();
@@ -276,22 +279,31 @@ export default function ScenariosPage() {
         const browserList = (browserData.browsers || []).slice().sort((a: BrowserOption, b: BrowserOption) => a.name.localeCompare(b.name));
         setBrowsers(browserList);
         if (browserList.length > 0 && !selectedBrowser) {
-          const hasHeaded = browserList.some((b: BrowserOption) => !b.headless);
+          // Derive unique browser families (base IDs without -headless suffix)
+          const headedBrowsers = browserList.filter((b: BrowserOption) => !b.headless);
+          const hasHeaded = headedBrowsers.length > 0;
           const raw = typeof window !== "undefined"
             ? localStorage.getItem(`checkmate:browser:${projectId}`)
             : null;
+          // Restore headless mode from saved preference
+          const savedWasHeadless = raw?.endsWith("-headless") ?? false;
+          const savedBase = raw?.replace(/-headless$/, "") ?? null;
+
           let preferred: string;
           if (hasHeaded) {
-            // Headed + headless both available: strip suffix, toggle controls mode
-            const saved = raw?.replace(/-headless$/, "") ?? null;
-            preferred = (saved && browserList.some((b: BrowserOption) => b.id === saved))
-              ? saved
-              : (browserData.default?.replace(/-headless$/, "") || browserList.find((b: BrowserOption) => !b.headless)?.id);
+            preferred = (savedBase && browserList.some((b: BrowserOption) => b.id === savedBase))
+              ? savedBase
+              : (browserData.default?.replace(/-headless$/, "") || headedBrowsers[0]?.id);
+            // Check if the headless counterpart exists before enabling headless mode
+            if (savedWasHeadless && browserList.some((b: BrowserOption) => b.id === `${preferred}-headless`)) {
+              setHeadlessMode(true);
+            }
           } else {
-            // Headless-only environment (e.g. Docker): use full id as-is
-            preferred = (raw && browserList.some((b: BrowserOption) => b.id === raw))
-              ? raw
-              : (browserData.default || browserList[0]?.id);
+            // Headless-only environment (e.g. Docker): strip suffix for base id
+            preferred = (savedBase && browserList.some((b: BrowserOption) => b.id === `${savedBase}-headless`))
+              ? savedBase
+              : (browserData.default?.replace(/-headless$/, "") || browserList[0]?.id.replace(/-headless$/, ""));
+            setHeadlessMode(true); // forced headless
           }
           setSelectedBrowser(preferred);
           setSelectedBrowsers([preferred]);
@@ -483,6 +495,19 @@ export default function ScenariosPage() {
     return sorted;
   }, [selection, filteredTestCases, folders]);
 
+  // Unique browser families (base IDs, e.g. "chromium", "firefox" — no "-headless" variants)
+  const browserFamilies = useMemo(() => {
+    const seen = new Set<string>();
+    return browsers.reduce<BrowserOption[]>((acc, b) => {
+      const baseId = b.id.replace(/-headless$/, "");
+      if (!seen.has(baseId)) {
+        seen.add(baseId);
+        acc.push({ ...b, id: baseId, name: b.name.replace(" (Headless)", ""), headless: false });
+      }
+      return acc;
+    }, []);
+  }, [browsers]);
+
   // Toggle a browser in/out of the multi-browser selection.
   // At least one browser must remain selected (enforced here, not just in UI).
   function toggleBrowserSelection(id: string) {
@@ -518,17 +543,13 @@ export default function ScenariosPage() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             test_case_ids: testCaseIds,
-            // Apply headed/headless mode. In headless-only envs selectedBrowsers
-            // already contain the full id (e.g. "chromium-headless"); in headed
-            // envs we apply the suffix based on the current mode toggle.
+            // Apply headless suffix to base browser IDs when headless mode is on
             ...(() => {
-              const hasHeaded = browsers.some(b => !b.headless);
-              const isHeadless = selectedBrowser?.endsWith("-headless") ?? false;
-              const effectiveBrowsers = hasHeaded
-                ? selectedBrowsers.map(b => isHeadless ? `${b}-headless` : b)
-                : selectedBrowsers; // already full ids in headless-only mode
+              const effectiveBrowsers = selectedBrowsers.map(b =>
+                headlessMode ? `${b}-headless` : b
+              );
               return {
-                browser: effectiveBrowsers[0] || selectedBrowser || undefined,
+                browser: effectiveBrowsers[0] || (headlessMode ? `${selectedBrowser}-headless` : selectedBrowser) || undefined,
                 browsers: effectiveBrowsers.length > 1 ? effectiveBrowsers : [],
               };
             })(),
@@ -927,9 +948,9 @@ export default function ScenariosPage() {
               {(retryEnabled || selectedBrowser || viewportWidth !== 1280 || viewportHeight !== 720 || parallelWorkers > 1) && !showRunSettings && (
                 <span className="text-xs text-muted-foreground/70">
                   ({[
-                    selectedBrowsers.length > 1
+                    (selectedBrowsers.length > 1
                       ? selectedBrowsers.map(id => getBrowserDisplay(id).label).join("+")
-                      : browsers.find((b) => b.id === selectedBrowser)?.name,
+                      : browserFamilies.find((b) => b.id === selectedBrowser)?.name) + (headlessMode ? " HL" : ""),
                     (viewportWidth !== 1280 || viewportHeight !== 720) && `${viewportWidth}x${viewportHeight}`,
                     retryEnabled && `retry ×${maxRetries}`,
                     parallelWorkers > 1 && `${parallelWorkers}× parallel`,
@@ -950,31 +971,20 @@ export default function ScenariosPage() {
                       <Select
                         value={selectedBrowser || ""}
                         onValueChange={(v) => {
-                          const hasHeaded = browsers.some(b => !b.headless);
-                          if (hasHeaded) {
-                            const isHeadless = selectedBrowser?.endsWith("-headless") ?? false;
-                            const oldBase = (selectedBrowser || "").replace(/-headless$/, "");
-                            setSelectedBrowser(isHeadless ? `${v}-headless` : v);
-                            setSelectedBrowsers(prev => {
-                              if (prev.includes(v)) return prev.filter(b => b !== oldBase || b === v);
-                              return prev.map(b => b === oldBase ? v : b);
-                            });
-                          } else {
-                            // Headless-only: use id as-is
-                            setSelectedBrowser(v);
-                            setSelectedBrowsers([v]);
-                          }
+                          const oldBase = selectedBrowser;
+                          setSelectedBrowser(v);
+                          // Update multi-browser selection: swap old for new
+                          setSelectedBrowsers(prev => {
+                            if (prev.includes(v)) return prev.filter(b => b !== oldBase || b === v);
+                            return prev.map(b => b === oldBase ? v : b);
+                          });
                         }}
                       >
                         <SelectTrigger className="w-[180px] h-8">
                           <SelectValue placeholder="Browser" />
                         </SelectTrigger>
                         <SelectContent>
-                          {/* Show headed browsers when available; fall back to all in headless-only envs */}
-                          {(browsers.some(b => !b.headless)
-                            ? browsers.filter(b => !b.headless)
-                            : browsers
-                          ).map((b) => (
+                          {browserFamilies.map((b) => (
                             <SelectItem key={b.id} value={b.id}>
                               {b.name}
                             </SelectItem>
@@ -984,12 +994,12 @@ export default function ScenariosPage() {
                     </div>
                   )}
 
-                  {/* Browser mode toggle */}
-                  {browsers.length > 0 && selectedBrowser && (
+                  {/* Browser mode toggle (headed / headless) */}
+                  {browsers.length > 0 && selectedBrowser && browsers.some(b => b.id === `${selectedBrowser}-headless`) && (
                     <BrowserModeToggle
                       browsers={browsers}
-                      selectedBrowser={selectedBrowser}
-                      onBrowserChange={setSelectedBrowser}
+                      selectedBrowser={headlessMode ? `${selectedBrowser}-headless` : selectedBrowser}
+                      onBrowserChange={(id) => setHeadlessMode(id.endsWith("-headless"))}
                     />
                   )}
 
@@ -1130,8 +1140,8 @@ export default function ScenariosPage() {
                     </Select>
                   </div>
 
-                  {/* Multi-browser icon toggles — only shown when >1 headed browser is available */}
-                  {browsers.filter(b => !b.headless).length > 1 && (
+                  {/* Multi-browser icon toggles — show when 2+ browser families exist */}
+                  {browserFamilies.length > 1 && (
                     <>
                       <div className="h-6 w-px bg-border" />
                       <div className="flex items-center gap-1.5">
@@ -1139,7 +1149,7 @@ export default function ScenariosPage() {
                           Browsers
                         </label>
                         <div className="flex items-center gap-1">
-                          {browsers.filter(b => !b.headless).map(b => {
+                          {browserFamilies.map(b => {
                             const d = getBrowserDisplay(b.id);
                             const sel = selectedBrowsers.includes(b.id);
                             return (

@@ -1,12 +1,12 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, startTransition } from "react";
 import { useParams, useSearchParams, useRouter } from "next/navigation";
-import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   ArrowLeft,
   Play,
+  Square,
   CheckCircle,
   XCircle,
   Clock,
@@ -15,10 +15,18 @@ import {
   Loader2,
   RefreshCw,
   AlertCircle,
+  Trash2,
+  Sparkles,
 } from "lucide-react";
+import { HealReviewDialog } from "@/components/runs/HealReviewDialog";
+import { healerApi } from "@/lib/api/healer";
+import type { HealSuggestion, HealedStep } from "@/types/healer";
 import { ThemeToggle } from "@/components/dashboard/ThemeToggle";
 import { cn } from "@/lib/utils";
 import { API_URL, getFeatures, Features } from "@/lib/api";
+import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
+import { toast } from "sonner";
+import { useEnvironment } from "@/context/EnvironmentContext";
 
 interface TestStep {
   action: string;
@@ -34,6 +42,7 @@ interface TestCase {
   priority: string;
   tags: string[] | string;
   steps: string | TestStep[];
+  test_case_number: number | null;
 }
 
 interface RunStep {
@@ -65,6 +74,7 @@ interface TestRun {
   created_at: string;
   steps: RunStep[];
   total_steps?: number; // Total steps expected (for progress display)
+  browser: string | null;
   // Retry tracking
   retry_attempt: number;
   max_retries: number;
@@ -72,6 +82,17 @@ interface TestRun {
   retry_mode: string | null;
   retry_reason: string | null;
 }
+
+const BROWSER_LABELS: Record<string, string> = {
+  chromium: "Google Chrome",
+  "chromium-headless": "Google Chrome (HL)",
+  chrome: "Chrome",
+  "chrome-headless": "Chrome (HL)",
+  firefox: "Firefox",
+  "firefox-headless": "Firefox (HL)",
+  webkit: "Safari",
+  "webkit-headless": "Safari (HL)",
+};
 
 // Grouped run with its retries
 interface RunGroup {
@@ -145,6 +166,22 @@ const ACTION_LABELS: Record<string, string> = {
   drag: "Drag & Drop",
 };
 
+function formatRelativeDate(dateStr: string): string {
+  const now = Date.now();
+  const then = new Date(dateStr).getTime();
+  const diffMs = now - then;
+  const diffSec = Math.floor(diffMs / 1000);
+
+  if (diffSec < 60) return "just now";
+  const diffMin = Math.floor(diffSec / 60);
+  if (diffMin < 60) return `${diffMin}m ago`;
+  const diffHr = Math.floor(diffMin / 60);
+  if (diffHr < 24) return `${diffHr}h ago`;
+  const diffDay = Math.floor(diffHr / 24);
+  if (diffDay < 30) return `${diffDay}d ago`;
+  return new Date(dateStr).toLocaleDateString();
+}
+
 export default function TestCaseRunsPage() {
   const params = useParams();
   const searchParams = useSearchParams();
@@ -159,9 +196,12 @@ export default function TestCaseRunsPage() {
   const runIdFromUrl = searchParams.get("runId");
   const hasAutoRun = useRef(false);
   const hasScrolledToRun = useRef(false);
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const { activeEnv } = useEnvironment();
 
   const [testCase, setTestCase] = useState<TestCase | null>(null);
   const [runs, setRuns] = useState<TestRun[]>([]);
+  const [projectPrefix, setProjectPrefix] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [isRunning, setIsRunning] = useState(false);
   const [expandedRuns, setExpandedRuns] = useState<Set<number>>(new Set());
@@ -184,6 +224,19 @@ export default function TestCaseRunsPage() {
   // Track which run groups have their retries expanded
   const [expandedRetryGroups, setExpandedRetryGroups] = useState<Set<number>>(new Set());
 
+  // Clear / delete state
+  const [clearAllOpen, setClearAllOpen] = useState(false);
+  const [clearingAll, setClearingAll] = useState(false);
+  const [deletingRunId, setDeletingRunId] = useState<number | null>(null);
+
+  // Auto-Heal state
+  const [healSuggestion, setHealSuggestion] = useState<HealSuggestion | null>(null);
+  const [healDialogOpen, setHealDialogOpen] = useState(false);
+  const [isApplyingHeal, setIsApplyingHeal] = useState(false);
+  const [analyzingRunId, setAnalyzingRunId] = useState<number | null>(null);
+  // The run id whose suggestion is currently shown in the dialog
+  const [healSourceRunId, setHealSourceRunId] = useState<number | null>(null);
+
   // Compute grouped runs
   const runGroups = groupRuns(runs);
 
@@ -192,7 +245,27 @@ export default function TestCaseRunsPage() {
     fetchRuns();
     fetchBrowsers();
     fetchFeatures();
+    fetchProjectPrefix();
   }, [testCaseId]);
+
+  // Persist browser selection to localStorage so it survives page navigation
+  useEffect(() => {
+    if (selectedBrowser) {
+      localStorage.setItem(`checkmate:browser:${projectId}`, selectedBrowser);
+    }
+  }, [selectedBrowser, projectId]);
+
+  async function fetchProjectPrefix() {
+    try {
+      const res = await fetch(`${API_URL}/api/projects/${projectId}`);
+      if (res.ok) {
+        const data = await res.json();
+        setProjectPrefix(data.test_case_prefix || null);
+      }
+    } catch (error) {
+      console.error("Failed to fetch project:", error);
+    }
+  }
 
   async function fetchFeatures() {
     const f = await getFeatures();
@@ -268,13 +341,21 @@ export default function TestCaseRunsPage() {
       const res = await fetch(`${API_URL}/api/test-runs/browsers`);
       if (res.ok) {
         const data = await res.json();
-        setBrowsers(data.browsers || []);
-        // Set browser from URL param, or fall back to default
+        const browserList = (data.browsers || []).slice().sort((a: Browser, b: Browser) => a.name.localeCompare(b.name));
+        setBrowsers(browserList);
+        // Set browser from URL param, then localStorage, then server default
         if (!selectedBrowser) {
-          if (browserFromUrl && data.browsers?.some((b: Browser) => b.id === browserFromUrl)) {
+          if (browserFromUrl && browserList.some((b: Browser) => b.id === browserFromUrl)) {
             setSelectedBrowser(browserFromUrl);
-          } else if (data.default) {
-            setSelectedBrowser(data.default);
+          } else {
+            const raw = typeof window !== "undefined"
+              ? localStorage.getItem(`checkmate:browser:${projectId}`)
+              : null;
+            const saved = raw?.replace(/-headless$/, "") ?? null;
+            const preferred = (saved && browserList.some((b: Browser) => b.id === saved))
+              ? saved
+              : data.default?.replace(/-headless$/, "");
+            if (preferred) setSelectedBrowser(preferred);
           }
         }
       }
@@ -283,7 +364,56 @@ export default function TestCaseRunsPage() {
     }
   }
 
+  async function handleClearAllRuns() {
+    setClearingAll(true);
+    try {
+      const res = await fetch(
+        `${API_URL}/api/test-runs/test-case/${testCaseId}`,
+        { method: "DELETE" }
+      );
+      if (res.ok) {
+        const data = await res.json();
+        setRuns([]);
+        setExpandedRuns(new Set());
+        setExpandedRetryGroups(new Set());
+        toast.success(`Cleared ${data.deleted} run(s)`);
+      } else {
+        toast.error("Failed to clear history");
+      }
+    } catch {
+      toast.error("Failed to clear history");
+    } finally {
+      setClearingAll(false);
+      setClearAllOpen(false);
+    }
+  }
+
+  async function handleDeleteSingleRun(runId: number) {
+    try {
+      const res = await fetch(`${API_URL}/api/test-runs/${runId}`, {
+        method: "DELETE",
+      });
+      if (res.ok) {
+        setRuns((prev) => prev.filter((r) => r.id !== runId));
+        toast.success("Run deleted");
+      } else {
+        toast.error("Failed to delete run");
+      }
+    } catch {
+      toast.error("Failed to delete run");
+    } finally {
+      setDeletingRunId(null);
+    }
+  }
+
+  function handleCancelTest() {
+    abortControllerRef.current?.abort();
+  }
+
   async function handleRunTest() {
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
     setIsRunning(true);
     setVisibleStepIndex(-1);
     setRetryStatus(null);
@@ -293,10 +423,11 @@ export default function TestCaseRunsPage() {
     let runId: number | null = null;
     let totalSteps = 0;
 
-    // Build request body with retry config
+    // Build request body with retry config and active environment
     const requestBody: {
       browser?: string | null;
       retry?: { max_retries: number; retry_mode: string };
+      environment_id?: number;
     } = { browser: selectedBrowser };
 
     if (retryEnabled && maxRetries > 0) {
@@ -306,6 +437,10 @@ export default function TestCaseRunsPage() {
       };
     }
 
+    if (activeEnv) {
+      requestBody.environment_id = activeEnv.id;
+    }
+
     try {
       const response = await fetch(
         `${API_URL}/api/test-cases/${testCaseId}/runs/stream`,
@@ -313,6 +448,7 @@ export default function TestCaseRunsPage() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(requestBody),
+          signal: controller.signal,
         }
       );
 
@@ -365,6 +501,7 @@ export default function TestCaseRunsPage() {
                     created_at: new Date().toISOString(),
                     steps: [],
                     total_steps: totalSteps,
+                    browser: data.browser || null,
                     // Retry tracking
                     retry_attempt: data.retry_attempt || 0,
                     max_retries: data.max_retries || 0,
@@ -382,38 +519,39 @@ export default function TestCaseRunsPage() {
                   break;
 
                 case "step_started":
+                  // Urgent: drives the animation progress indicator
                   setVisibleStepIndex(data.step_number - 1);
-                  // Add or update placeholder step (handles retries)
-                  const placeholderStep: RunStep = {
-                    id: data.step_number,
-                    step_number: data.step_number,
-                    action: data.action,
-                    target: data.target || null,
-                    value: data.value || null,
-                    status: "running",
-                    duration: null,
-                    error: null,
-                    screenshot: null,
-                    fixture_name: data.fixture_name || null,
-                    attempt: data.attempt,
-                    max_attempts: data.max_attempts,
-                  };
-                  setRuns((prev) => {
-                    const updated = [...prev];
-                    if (updated[0] && updated[0].id === runId) {
-                      const steps = [...updated[0].steps];
-                      const existingIdx = steps.findIndex(s => s.step_number === data.step_number);
-                      if (existingIdx >= 0) {
-                        // Update existing step (retry case)
-                        steps[existingIdx] = placeholderStep;
-                      } else {
-                        // Add new step
-                        steps.push(placeholderStep);
+                  // Non-urgent: update the steps list (can wait for next idle frame)
+                  {
+                    const placeholderStep: RunStep = {
+                      id: data.step_number,
+                      step_number: data.step_number,
+                      action: data.action,
+                      target: data.target || null,
+                      value: data.value || null,
+                      status: "running",
+                      duration: null,
+                      error: null,
+                      screenshot: null,
+                      fixture_name: data.fixture_name || null,
+                      attempt: data.attempt,
+                      max_attempts: data.max_attempts,
+                    };
+                    startTransition(() => setRuns((prev) => {
+                      const updated = [...prev];
+                      if (updated[0] && updated[0].id === runId) {
+                        const steps = [...updated[0].steps];
+                        const existingIdx = steps.findIndex(s => s.step_number === data.step_number);
+                        if (existingIdx >= 0) {
+                          steps[existingIdx] = placeholderStep;
+                        } else {
+                          steps.push(placeholderStep);
+                        }
+                        updated[0] = { ...updated[0], steps };
                       }
-                      updated[0] = { ...updated[0], steps };
-                    }
-                    return updated;
-                  });
+                      return updated;
+                    }));
+                  }
                   break;
 
                 case "step_completed":
@@ -432,8 +570,7 @@ export default function TestCaseRunsPage() {
                     max_attempts: data.max_attempts,
                   };
                   completedSteps.push(completedStep);
-                  // Update the step status
-                  setRuns((prev) => {
+                  startTransition(() => setRuns((prev) => {
                     const updated = [...prev];
                     if (updated[0] && updated[0].id === runId) {
                       const steps = [...updated[0].steps];
@@ -441,31 +578,26 @@ export default function TestCaseRunsPage() {
                       updated[0] = { ...updated[0], steps };
                     }
                     return updated;
-                  });
+                  }));
                   break;
 
                 case "run_completed":
-                  // Update with final run state - find by ID since retries may have added new runs
-                  setRuns((prev) => {
-                    return prev.map((run) => {
-                      if (run.id === data.run_id) {
-                        return {
-                          ...run,
-                          status: data.status,
-                          pass_count: data.pass_count,
-                          error_count: data.error_count,
-                          summary: data.summary,
-                          completed_at: new Date().toISOString(),
-                        };
-                      }
-                      return run;
-                    });
-                  });
+                  startTransition(() => setRuns((prev) =>
+                    prev.map((run) =>
+                      run.id === data.run_id
+                        ? { ...run, status: data.status, pass_count: data.pass_count, error_count: data.error_count, summary: data.summary, completed_at: new Date().toISOString() }
+                        : run
+                    )
+                  ));
                   // Only clear animation if this is the final run (no more retries)
                   if (data.status === "passed" || data.retry_attempt >= data.max_retries) {
                     setAnimatingRunId(null);
                     setVisibleStepIndex(-1);
                     setRetryStatus(null);
+                    // Auto-trigger heal on final failure
+                    if (data.status === "failed") {
+                      triggerHeal(data.run_id);
+                    }
                   }
                   break;
 
@@ -500,13 +632,74 @@ export default function TestCaseRunsPage() {
         }
       }
       }
-    } catch (error) {
-      console.error("Failed to run test:", error);
+    } catch (error: unknown) {
+      if (error instanceof Error && error.name === "AbortError") {
+        // User cancelled — mark the in-progress run as cancelled in the UI
+        setRuns((prev) =>
+          prev.map((run) =>
+            run.status === "running" ? { ...run, status: "cancelled" } : run
+          )
+        );
+      } else {
+        console.error("Failed to run test:", error);
+      }
       setAnimatingRunId(null);
       setRetryStatus(null);
     } finally {
       setIsRunning(false);
       setVisibleStepIndex(-1);
+      abortControllerRef.current = null;
+    }
+  }
+
+  async function triggerHeal(runId: number) {
+    if (!testCase) return;
+    setAnalyzingRunId(runId);
+    setHealSourceRunId(runId);
+    try {
+      const suggestion = await healerApi.suggest(testCase.id, runId);
+      setHealSuggestion(suggestion);
+      setHealDialogOpen(true);
+    } catch (err) {
+      console.error("Heal analysis failed", err);
+      toast.error("AI heal analysis failed — try again manually.");
+    } finally {
+      setAnalyzingRunId(null);
+    }
+  }
+
+  async function handleApplyHeal(healedSteps: HealedStep[]) {
+    if (!testCase) return;
+    setIsApplyingHeal(true);
+    try {
+      // Strip change_reason — not part of the backend TestCaseBase schema
+      const cleanedSteps = healedSteps.map(({ change_reason: _cr, ...step }) => step);
+      // Build an explicit payload — the local TestCase interface omits project_id
+      // which TestCaseCreate requires. Extract it from the URL param.
+      const payload = {
+        project_id: parseInt(projectId),
+        name: testCase.name,
+        natural_query: testCase.natural_query,
+        priority: testCase.priority,
+        tags: testCase.tags || null,
+        steps: JSON.stringify(cleanedSteps),
+      };
+      const res = await fetch(`${API_URL}/api/test-cases/${testCase.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) throw new Error("Failed to save healed steps");
+      setHealDialogOpen(false);
+      setHealSuggestion(null);
+      // Refresh testCase so the next heal shows the updated "Before" column
+      await fetchTestCase();
+      toast.success("Test steps updated — run again to verify the fix.");
+    } catch (err) {
+      console.error("Apply heal failed", err);
+      toast.error("Failed to apply fix. Please try again.");
+    } finally {
+      setIsApplyingHeal(false);
     }
   }
 
@@ -548,13 +741,15 @@ export default function TestCaseRunsPage() {
   const getStatusIcon = (status: string) => {
     switch (status) {
       case "passed":
-        return <CheckCircle className="h-5 w-5 text-green-500" />;
+        return <CheckCircle className="h-4 w-4 text-green-500" />;
       case "failed":
-        return <XCircle className="h-5 w-5 text-red-500" />;
+        return <XCircle className="h-4 w-4 text-red-500" />;
       case "running":
-        return <Loader2 className="h-5 w-5 text-primary animate-spin" />;
+        return <Loader2 className="h-4 w-4 text-primary animate-spin" />;
+      case "cancelled":
+        return <Square className="h-4 w-4 text-muted-foreground" />;
       default:
-        return <Clock className="h-5 w-5 text-muted-foreground" />;
+        return <Clock className="h-4 w-4 text-muted-foreground" />;
     }
   };
 
@@ -624,15 +819,18 @@ export default function TestCaseRunsPage() {
       <header className="border-b border-border">
         <div className="container mx-auto px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-4">
-            <Link
-              href={`/projects/${projectId}/test-cases/${testCaseId}`}
+            <button
+              onClick={() => router.back()}
               className="p-2 rounded-lg hover:bg-muted transition-colors"
             >
               <ArrowLeft className="h-5 w-5" />
-            </Link>
+            </button>
             <div>
               <h1 className="text-lg font-semibold">Run History</h1>
               <p className="text-xs text-muted-foreground">
+                {projectPrefix && testCase?.test_case_number != null && (
+                  <span className="font-mono mr-1">{projectPrefix}-T{testCase.test_case_number}</span>
+                )}
                 {testCase?.name}
               </p>
             </div>
@@ -696,12 +894,15 @@ export default function TestCaseRunsPage() {
             {browsers.length > 0 && (
               <div className="relative">
                 <select
-                  value={selectedBrowser || ""}
-                  onChange={(e) => setSelectedBrowser(e.target.value)}
+                  value={(selectedBrowser || "").replace(/-headless$/, "")}
+                  onChange={(e) => {
+                    const isHeadless = selectedBrowser?.endsWith("-headless") ?? false;
+                    setSelectedBrowser(isHeadless ? `${e.target.value}-headless` : e.target.value);
+                  }}
                   disabled={isRunning}
                   className="appearance-none px-3 py-2 pr-8 rounded-lg border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 disabled:opacity-50"
                 >
-                  {browsers.map((browser) => (
+                  {browsers.filter((browser) => !browser.headless).map((browser) => (
                     <option key={browser.id} value={browser.id}>
                       {browser.name}
                     </option>
@@ -710,24 +911,29 @@ export default function TestCaseRunsPage() {
                 <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 h-4 w-4 pointer-events-none text-muted-foreground" />
               </div>
             )}
-            <button
-              onClick={handleRunTest}
-              disabled={isRunning}
-              className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50"
-            >
-              {isRunning ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
+            {isRunning ? (
+              <button
+                onClick={handleCancelTest}
+                className="flex items-center gap-2 px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors"
+              >
+                <Square className="h-4 w-4 fill-current" />
+                Cancel Test
+              </button>
+            ) : (
+              <button
+                onClick={handleRunTest}
+                className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors"
+              >
                 <Play className="h-4 w-4" />
-              )}
-              {isRunning ? "Running..." : "Run Test"}
-            </button>
+                Run Test
+              </button>
+            )}
             <ThemeToggle />
           </div>
         </div>
       </header>
 
-      <main className="container mx-auto max-w-4xl px-6 py-8">
+      <main className="container mx-auto max-w-4xl px-6 py-4">
         {/* Retry Status Banner */}
         <AnimatePresence>
           {retryStatus && (
@@ -751,7 +957,12 @@ export default function TestCaseRunsPage() {
           animate={{ opacity: 1, y: 0 }}
           className="rounded-lg border border-border bg-card p-6 mb-6"
         >
-          <h2 className="text-xl font-bold mb-2">{testCase?.name}</h2>
+          <h2 className="text-xl font-bold mb-2">
+            {projectPrefix && testCase?.test_case_number != null && (
+              <span className="text-muted-foreground font-mono text-base mr-2">{projectPrefix}-T{testCase.test_case_number}</span>
+            )}
+            {testCase?.name}
+          </h2>
           <p className="text-muted-foreground mb-4">{testCase?.natural_query}</p>
           <div className="flex flex-wrap items-center gap-2">
             <span
@@ -774,9 +985,20 @@ export default function TestCaseRunsPage() {
 
         {/* Run History */}
         <div className="space-y-4">
-          <h3 className="text-lg font-semibold">
-            Run History ({runs.length})
-          </h3>
+          <div className="flex items-center justify-between">
+            <h3 className="text-lg font-semibold">
+              Run History ({runs.length})
+            </h3>
+            {runs.length > 0 && !isRunning && (
+              <button
+                onClick={() => setClearAllOpen(true)}
+                className="text-sm text-destructive hover:text-destructive/80 flex items-center gap-1 transition-colors"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+                Clear All
+              </button>
+            )}
+          </div>
 
           {runs.length === 0 ? (
             <div className="text-center py-12 border border-dashed border-border rounded-lg">
@@ -787,7 +1009,7 @@ export default function TestCaseRunsPage() {
               </p>
             </div>
           ) : (
-            <div className="space-y-3">
+            <div className="space-y-2">
               <AnimatePresence>
                 {runGroups.map((group, groupIndex) => {
                   const hasRetries = group.retries.length > 0;
@@ -806,64 +1028,94 @@ export default function TestCaseRunsPage() {
                         isNested && "ml-6 border-l-2 border-l-amber-500/50"
                       )}
                     >
-                      {/* Run Header */}
+                      {/* Compact Run Header — single line */}
                       <button
                         onClick={() => toggleRunExpanded(run.id)}
-                        className="w-full p-4 flex items-center justify-between hover:bg-muted/50 transition-colors"
+                        className="w-full px-4 py-2.5 flex items-center gap-3 hover:bg-muted/50 transition-colors"
                       >
-                        <div className="flex items-center gap-4">
-                          {getStatusIcon(run.status)}
-                          <div className="text-left">
-                            <div className="flex items-center gap-2">
-                              <span className="font-medium">
-                                {isNested ? `Retry #${run.retry_attempt}` : `Run #${run.id}`}
-                              </span>
-                              <span
-                                className={cn(
-                                  "text-xs px-2 py-0.5 rounded-full",
-                                  run.status === "passed"
-                                    ? "bg-green-500/10 text-green-500"
-                                    : run.status === "failed"
-                                    ? "bg-red-500/10 text-red-500"
-                                    : "bg-muted text-muted-foreground"
-                                )}
-                              >
-                                {run.status}
-                              </span>
-                              {run.retry_attempt > 0 && !isNested && (
-                                <span className="text-xs px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-600 dark:text-amber-400">
-                                  attempt {run.retry_attempt + 1}
-                                </span>
-                              )}
-                            </div>
-                            <p className="text-sm text-muted-foreground">
-                              {formatDate(run.created_at)}
-                            </p>
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-4">
-                          <div className="text-right text-sm">
-                            {run.id === animatingRunId ? (
-                              <span className="text-muted-foreground">
-                                {Math.max(0, visibleStepIndex + 1)} / {run.total_steps || run.steps.length} steps
-                              </span>
-                            ) : (
-                              <>
-                                <span className="text-green-500">{run.pass_count} passed</span>
-                                {run.error_count > 0 && (
-                                  <span className="text-red-500 ml-2">
-                                    {run.error_count} failed
-                                  </span>
-                                )}
-                              </>
-                            )}
-                          </div>
-                          {expandedRuns.has(run.id) ? (
-                            <ChevronDown className="h-5 w-5 text-muted-foreground" />
-                          ) : (
-                            <ChevronRight className="h-5 w-5 text-muted-foreground" />
+                        {getStatusIcon(run.status)}
+                        <span className="font-medium text-sm truncate text-left">
+                          {isNested ? `Retry #${run.retry_attempt}` : `Run #${run.id}`}
+                        </span>
+                        <span
+                          className={cn(
+                            "text-xs px-1.5 py-0.5 rounded-full shrink-0",
+                            run.status === "passed"
+                              ? "bg-green-500/10 text-green-500"
+                              : run.status === "failed"
+                              ? "bg-red-500/10 text-red-500"
+                              : "bg-muted text-muted-foreground"
                           )}
-                        </div>
+                        >
+                          {run.status}
+                        </span>
+                        {run.browser && (
+                          <span className="text-xs px-1.5 py-0.5 rounded bg-muted text-muted-foreground font-mono shrink-0">
+                            {BROWSER_LABELS[run.browser] ?? run.browser}
+                          </span>
+                        )}
+                        {run.retry_attempt > 0 && !isNested && (
+                          <span className="text-xs px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-600 dark:text-amber-400 shrink-0">
+                            attempt {run.retry_attempt + 1}
+                          </span>
+                        )}
+                        {run.id === animatingRunId ? (
+                          <span className="text-xs text-muted-foreground shrink-0">
+                            {Math.max(0, visibleStepIndex + 1)}/{run.total_steps || run.steps.length}
+                          </span>
+                        ) : (
+                          <>
+                            <span className="text-xs text-green-500 shrink-0">
+                              {run.pass_count}&#10003;
+                            </span>
+                            {run.error_count > 0 && (
+                              <span className="text-xs text-red-500 shrink-0">
+                                {run.error_count}&#10007;
+                              </span>
+                            )}
+                          </>
+                        )}
+                        <span className="text-xs text-muted-foreground shrink-0 ml-auto">
+                          {formatRelativeDate(run.created_at)}
+                        </span>
+                        {/* Auto-Heal controls — shown on every failed run */}
+                        {run.status === "failed" && (
+                          analyzingRunId === run.id ? (
+                            <span className="flex items-center gap-1 text-xs text-primary shrink-0">
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              AI analyzing…
+                            </span>
+                          ) : !(healDialogOpen && healSourceRunId === run.id) ? (
+                            <span
+                              role="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                triggerHeal(run.id);
+                              }}
+                              className="flex items-center gap-1 text-xs text-primary hover:text-primary/80 shrink-0 cursor-pointer"
+                              title="Get AI fix suggestion"
+                            >
+                              <Sparkles className="h-3.5 w-3.5" />
+                              Suggest Fix
+                            </span>
+                          ) : null
+                        )}
+                        <span
+                          role="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setDeletingRunId(run.id);
+                          }}
+                          className="p-1 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors shrink-0"
+                          title="Delete run"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </span>
+                        {expandedRuns.has(run.id) ? (
+                          <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" />
+                        ) : (
+                          <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" />
+                        )}
                       </button>
 
                       {/* Run Steps */}
@@ -952,10 +1204,10 @@ export default function TestCaseRunsPage() {
                                           alt={step.action === "screenshot" ? "Captured screenshot" : "Screenshot at failure"}
                                           className="rounded border border-border max-w-full h-auto max-h-64 cursor-pointer hover:opacity-90 transition-opacity"
                                           onClick={() => {
-                                            const win = window.open();
-                                            if (win) {
-                                              win.document.write(`<img src="data:image/png;base64,${step.screenshot}" style="max-width:100%"/>`);
-                                            }
+                                            const blob = new Blob([Uint8Array.from(atob(step.screenshot!), c => c.charCodeAt(0))], { type: "image/png" });
+                                            const url = URL.createObjectURL(blob);
+                                            const win = window.open(url, "_blank");
+                                            win?.addEventListener("load", () => URL.revokeObjectURL(url));
                                           }}
                                         />
                                       </div>
@@ -1033,6 +1285,49 @@ export default function TestCaseRunsPage() {
           )}
         </div>
       </main>
+
+      {/* Clear All Confirmation */}
+      <ConfirmDialog
+        open={clearAllOpen}
+        onOpenChange={setClearAllOpen}
+        title="Clear All Run History"
+        description={`This will permanently delete all ${runs.length} run(s) for this test case and their step data. This cannot be undone.`}
+        confirmLabel="Clear All"
+        variant="destructive"
+        onConfirm={handleClearAllRuns}
+        loading={clearingAll}
+        requireText="delete"
+      />
+
+      {/* Single Run Delete Confirmation */}
+      <ConfirmDialog
+        open={deletingRunId !== null}
+        onOpenChange={(open) => { if (!open) setDeletingRunId(null); }}
+        title="Delete Run"
+        description="This will permanently delete this test run and its step data. This cannot be undone."
+        confirmLabel="Delete"
+        variant="destructive"
+        onConfirm={() => { if (deletingRunId) handleDeleteSingleRun(deletingRunId); }}
+      />
+
+      {/* Auto-Heal Review Dialog */}
+      <HealReviewDialog
+        open={healDialogOpen}
+        onOpenChange={setHealDialogOpen}
+        suggestion={healSuggestion}
+        originalSteps={(() => {
+          try {
+            const raw = testCase?.steps;
+            if (!raw) return [];
+            if (Array.isArray(raw)) return raw;
+            return JSON.parse(raw as string);
+          } catch {
+            return [];
+          }
+        })()}
+        onApply={handleApplyHeal}
+        isApplying={isApplyingHeal}
+      />
     </div>
   );
 }
