@@ -29,3 +29,14 @@ export type {
   RunStatus,
   StepStatus,
 } from "./test-run";
+
+export type {
+  TestFolder,
+  TestFolderCreate,
+  TestFolderUpdate,
+  FolderType,
+  SmartCriteria,
+  FolderTreeNode,
+} from "./folder";
+
+export { parseSmartCriteria } from "./folder";
