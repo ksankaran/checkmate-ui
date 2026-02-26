@@ -1,20 +1,16 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   ArrowLeft,
   Settings,
-  Users,
-  FileText,
   MessageSquareText,
   Plus,
   Edit2,
   Trash2,
-  Eye,
-  EyeOff,
   X,
   Loader2,
   Save,
@@ -29,7 +25,8 @@ import {
   Send,
 } from "lucide-react";
 import { ThemeToggle } from "@/components/dashboard/ThemeToggle";
-import { FixturesTab } from "@/components/fixtures/FixturesTab";
+import { EnvironmentsTab } from "@/components/environments/EnvironmentsTab";
+
 import { API_URL } from "@/lib/api";
 
 interface Project {
@@ -37,26 +34,7 @@ interface Project {
   name: string;
   description: string | null;
   base_url: string;
-}
-
-interface Persona {
-  id: number;
-  name: string;
-  username: string;
-  description: string | null;
-  project_id: number;
-  created_at: string;
-  updated_at: string;
-}
-
-interface Page {
-  id: number;
-  name: string;
-  path: string;
-  description: string | null;
-  project_id: number;
-  created_at: string;
-  updated_at: string;
+  test_case_prefix: string | null;
 }
 
 interface NotificationChannel {
@@ -101,20 +79,7 @@ interface TestCase {
   tags: string | null;
 }
 
-type Tab = "general" | "context" | "personas" | "pages" | "fixtures" | "notifications" | "schedules";
-
-interface PersonaFormData {
-  name: string;
-  username: string;
-  password: string;
-  description: string;
-}
-
-interface PageFormData {
-  name: string;
-  path: string;
-  description: string;
-}
+type Tab = "general" | "context" | "notifications" | "schedules" | "environments";
 
 interface NotificationFormData {
   name: string;
@@ -189,12 +154,15 @@ function parseCronToHuman(cron: string): string {
 
 export default function ProjectSettingsPage() {
   const params = useParams();
+  const searchParams = useSearchParams();
   const projectId = params.id as string;
 
   const [project, setProject] = useState<Project | null>(null);
-  const [activeTab, setActiveTab] = useState<Tab>("general");
-  const [personas, setPersonas] = useState<Persona[]>([]);
-  const [pages, setPages] = useState<Page[]>([]);
+  const validTabs: Tab[] = ["general", "context", "notifications", "schedules", "environments"];
+  const tabParam = searchParams.get("tab") as Tab | null;
+  const [activeTab, setActiveTab] = useState<Tab>(
+    tabParam && validTabs.includes(tabParam) ? tabParam : "general"
+  );
   const [notifications, setNotifications] = useState<NotificationChannel[]>([]);
   const [schedules, setSchedules] = useState<Schedule[]>([]);
   const [testCases, setTestCases] = useState<TestCase[]>([]);
@@ -206,6 +174,7 @@ export default function ProjectSettingsPage() {
     description: "",
     base_url: "",
     page_load_state: "load",
+    test_case_prefix: "",
   });
   const [generalDirty, setGeneralDirty] = useState(false);
   const [savingGeneral, setSavingGeneral] = useState(false);
@@ -218,26 +187,11 @@ export default function ProjectSettingsPage() {
   // Modal state
   const [showModal, setShowModal] = useState(false);
   const [modalMode, setModalMode] = useState<"create" | "edit">("create");
-  const [editingPersona, setEditingPersona] = useState<Persona | null>(null);
-  const [editingPage, setEditingPage] = useState<Page | null>(null);
   const [editingNotification, setEditingNotification] = useState<NotificationChannel | null>(null);
   const [editingSchedule, setEditingSchedule] = useState<Schedule | null>(null);
-  const [showPassword, setShowPassword] = useState(false);
-  const [changePassword, setChangePassword] = useState(false);
   const [saving, setSaving] = useState(false);
 
   // Form data
-  const [personaForm, setPersonaForm] = useState<PersonaFormData>({
-    name: "",
-    username: "",
-    password: "",
-    description: "",
-  });
-  const [pageForm, setPageForm] = useState<PageFormData>({
-    name: "",
-    path: "",
-    description: "",
-  });
   const [notificationForm, setNotificationForm] = useState<NotificationFormData>({
     name: "",
     channel_type: "webhook",
@@ -267,8 +221,6 @@ export default function ProjectSettingsPage() {
   useEffect(() => {
     fetchProject();
     fetchContext();
-    fetchPersonas();
-    fetchPages();
     fetchNotifications();
     fetchSchedules();
     fetchTestCases();
@@ -285,6 +237,7 @@ export default function ProjectSettingsPage() {
           description: data.description || "",
           base_url: data.base_url || "",
           page_load_state: data.page_load_state || "load",
+          test_case_prefix: data.test_case_prefix || "",
         });
         setGeneralDirty(false);
       }
@@ -327,6 +280,7 @@ export default function ProjectSettingsPage() {
             description: generalForm.description || null,
             base_url: generalForm.base_url,
             page_load_state: generalForm.page_load_state,
+            test_case_prefix: generalForm.test_case_prefix || null,
           }),
         }
       );
@@ -371,34 +325,6 @@ export default function ProjectSettingsPage() {
     }
   }
 
-  async function fetchPersonas() {
-    try {
-      const res = await fetch(
-        `${API_URL}/api/projects/${projectId}/settings/personas`
-      );
-      if (res.ok) {
-        const data = await res.json();
-        setPersonas(data);
-      }
-    } catch (error) {
-      console.error("Failed to fetch personas:", error);
-    }
-  }
-
-  async function fetchPages() {
-    try {
-      const res = await fetch(
-        `${API_URL}/api/projects/${projectId}/settings/pages`
-      );
-      if (res.ok) {
-        const data = await res.json();
-        setPages(data);
-      }
-    } catch (error) {
-      console.error("Failed to fetch pages:", error);
-    }
-  }
-
   async function fetchNotifications() {
     try {
       const res = await fetch(
@@ -438,188 +364,6 @@ export default function ProjectSettingsPage() {
       }
     } catch (error) {
       console.error("Failed to fetch test cases:", error);
-    }
-  }
-
-  // Persona handlers
-  function openCreatePersonaModal() {
-    setPersonaForm({ name: "", username: "", password: "", description: "" });
-    setEditingPersona(null);
-    setModalMode("create");
-    setShowPassword(false);
-    setChangePassword(false);
-    setShowModal(true);
-  }
-
-  function openEditPersonaModal(persona: Persona) {
-    setPersonaForm({
-      name: persona.name,
-      username: persona.username,
-      password: "",
-      description: persona.description || "",
-    });
-    setEditingPersona(persona);
-    setModalMode("edit");
-    setShowPassword(false);
-    setChangePassword(false);
-    setShowModal(true);
-  }
-
-  async function handleSavePersona() {
-    setSaving(true);
-    try {
-      if (modalMode === "create") {
-        const res = await fetch(
-          `${API_URL}/api/projects/${projectId}/settings/personas`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              name: personaForm.name,
-              username: personaForm.username,
-              password: personaForm.password,
-              description: personaForm.description || null,
-              project_id: parseInt(projectId),
-            }),
-          }
-        );
-        if (res.ok) {
-          await fetchPersonas();
-          setShowModal(false);
-        } else {
-          const err = await res.json();
-          console.error("Failed to create persona:", err);
-        }
-      } else if (editingPersona) {
-        const updateData: Record<string, string | null> = {
-          name: personaForm.name,
-          username: personaForm.username,
-          description: personaForm.description || null,
-        };
-        if (changePassword && personaForm.password) {
-          updateData.password = personaForm.password;
-        }
-        const res = await fetch(
-          `${API_URL}/api/projects/${projectId}/settings/personas/${editingPersona.id}`,
-          {
-            method: "PUT",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(updateData),
-          }
-        );
-        if (res.ok) {
-          await fetchPersonas();
-          setShowModal(false);
-        } else {
-          const err = await res.json();
-          console.error("Failed to update persona:", err);
-        }
-      }
-    } catch (error) {
-      console.error("Failed to save persona:", error);
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function handleDeletePersona(personaId: number) {
-    if (!confirm("Are you sure you want to delete this persona?")) return;
-    try {
-      const res = await fetch(
-        `${API_URL}/api/projects/${projectId}/settings/personas/${personaId}`,
-        { method: "DELETE" }
-      );
-      if (res.ok) {
-        await fetchPersonas();
-      }
-    } catch (error) {
-      console.error("Failed to delete persona:", error);
-    }
-  }
-
-  // Page handlers
-  function openCreatePageModal() {
-    setPageForm({ name: "", path: "", description: "" });
-    setEditingPage(null);
-    setModalMode("create");
-    setShowModal(true);
-  }
-
-  function openEditPageModal(page: Page) {
-    setPageForm({
-      name: page.name,
-      path: page.path,
-      description: page.description || "",
-    });
-    setEditingPage(page);
-    setModalMode("edit");
-    setShowModal(true);
-  }
-
-  async function handleSavePage() {
-    setSaving(true);
-    try {
-      if (modalMode === "create") {
-        const res = await fetch(
-          `${API_URL}/api/projects/${projectId}/settings/pages`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              name: pageForm.name,
-              path: pageForm.path,
-              description: pageForm.description || null,
-              project_id: parseInt(projectId),
-            }),
-          }
-        );
-        if (res.ok) {
-          await fetchPages();
-          setShowModal(false);
-        } else {
-          const err = await res.json();
-          console.error("Failed to create page:", err);
-        }
-      } else if (editingPage) {
-        const res = await fetch(
-          `${API_URL}/api/projects/${projectId}/settings/pages/${editingPage.id}`,
-          {
-            method: "PUT",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              name: pageForm.name,
-              path: pageForm.path,
-              description: pageForm.description || null,
-            }),
-          }
-        );
-        if (res.ok) {
-          await fetchPages();
-          setShowModal(false);
-        } else {
-          const err = await res.json();
-          console.error("Failed to update page:", err);
-        }
-      }
-    } catch (error) {
-      console.error("Failed to save page:", error);
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function handleDeletePage(pageId: number) {
-    if (!confirm("Are you sure you want to delete this page?")) return;
-    try {
-      const res = await fetch(
-        `${API_URL}/api/projects/${projectId}/settings/pages/${pageId}`,
-        { method: "DELETE" }
-      );
-      if (res.ok) {
-        await fetchPages();
-      }
-    } catch (error) {
-      console.error("Failed to delete page:", error);
     }
   }
 
@@ -1044,39 +788,6 @@ export default function ProjectSettingsPage() {
             Context
           </button>
           <button
-            onClick={() => setActiveTab("personas")}
-            className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${
-              activeTab === "personas"
-                ? "bg-primary text-primary-foreground"
-                : "bg-muted hover:bg-muted/80"
-            }`}
-          >
-            <Users className="h-4 w-4" />
-            Personas
-          </button>
-          <button
-            onClick={() => setActiveTab("pages")}
-            className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${
-              activeTab === "pages"
-                ? "bg-primary text-primary-foreground"
-                : "bg-muted hover:bg-muted/80"
-            }`}
-          >
-            <FileText className="h-4 w-4" />
-            Pages
-          </button>
-          <button
-            onClick={() => setActiveTab("fixtures")}
-            className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${
-              activeTab === "fixtures"
-                ? "bg-primary text-primary-foreground"
-                : "bg-muted hover:bg-muted/80"
-            }`}
-          >
-            <Clock className="h-4 w-4" />
-            Fixtures
-          </button>
-          <button
             onClick={() => setActiveTab("notifications")}
             className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${
               activeTab === "notifications"
@@ -1097,6 +808,17 @@ export default function ProjectSettingsPage() {
           >
             <Calendar className="h-4 w-4" />
             Schedules
+          </button>
+          <button
+            onClick={() => setActiveTab("environments")}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${
+              activeTab === "environments"
+                ? "bg-primary text-primary-foreground"
+                : "bg-muted hover:bg-muted/80"
+            }`}
+          >
+            <Globe className="h-4 w-4" />
+            Environments
           </button>
         </div>
 
@@ -1202,6 +924,26 @@ export default function ProjectSettingsPage() {
                     Used by <code className="bg-muted px-1 rounded">wait_for_page</code> action when no specific state is provided.
                   </p>
                 </div>
+
+                <div>
+                  <label className="block text-sm font-medium mb-1">
+                    Test Case Prefix
+                  </label>
+                  <input
+                    type="text"
+                    value={generalForm.test_case_prefix}
+                    onChange={(e) => {
+                      setGeneralForm({ ...generalForm, test_case_prefix: e.target.value.toUpperCase().slice(0, 6) });
+                      setGeneralDirty(true);
+                    }}
+                    placeholder="e.g., CHKMT"
+                    maxLength={6}
+                    className="w-full max-w-[200px] px-3 py-2 rounded-lg border border-border bg-background focus:outline-none focus:ring-2 focus:ring-primary uppercase font-mono tracking-wider"
+                  />
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Used for test case numbering (e.g., CHKMT-T1). Max 6 characters, uppercase only.
+                  </p>
+                </div>
               </div>
             </motion.div>
           )}
@@ -1270,196 +1012,6 @@ Examples:
                 </ul>
               </div>
             </motion.div>
-          )}
-
-          {activeTab === "personas" && (
-            <motion.div
-              key="personas"
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-            >
-              <div className="flex items-center justify-between mb-4">
-                <div>
-                  <h2 className="text-lg font-semibold">Personas</h2>
-                  <p className="text-sm text-muted-foreground">
-                    Login credentials that can be referenced in test cases using{" "}
-                    <code className="bg-muted px-1 py-0.5 rounded text-xs">
-                      {"{{persona.username}}"}
-                    </code>{" "}
-                    and{" "}
-                    <code className="bg-muted px-1 py-0.5 rounded text-xs">
-                      {"{{persona.password}}"}
-                    </code>
-                  </p>
-                </div>
-                <button
-                  onClick={openCreatePersonaModal}
-                  className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors"
-                >
-                  <Plus className="h-4 w-4" />
-                  Add Persona
-                </button>
-              </div>
-
-              {personas.length === 0 ? (
-                <div className="text-center py-12 border border-dashed border-border rounded-lg">
-                  <Users className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
-                  <h3 className="text-lg font-medium mb-2">No personas yet</h3>
-                  <p className="text-muted-foreground mb-4">
-                    Add personas to store login credentials for your tests
-                  </p>
-                  <button
-                    onClick={openCreatePersonaModal}
-                    className="inline-flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors"
-                  >
-                    <Plus className="h-4 w-4" />
-                    Add Persona
-                  </button>
-                </div>
-              ) : (
-                <div className="border border-border rounded-lg overflow-hidden">
-                  <table className="w-full">
-                    <thead className="bg-muted/50">
-                      <tr>
-                        <th className="text-left px-4 py-3 text-sm font-medium">Name</th>
-                        <th className="text-left px-4 py-3 text-sm font-medium">Username</th>
-                        <th className="text-left px-4 py-3 text-sm font-medium">Description</th>
-                        <th className="text-right px-4 py-3 text-sm font-medium">Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-border">
-                      {personas.map((persona) => (
-                        <tr key={persona.id} className="hover:bg-muted/30">
-                          <td className="px-4 py-3">
-                            <span className="font-mono text-sm bg-muted px-2 py-0.5 rounded">
-                              {persona.name}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3 text-sm">{persona.username}</td>
-                          <td className="px-4 py-3 text-sm text-muted-foreground">
-                            {persona.description || "-"}
-                          </td>
-                          <td className="px-4 py-3 text-right">
-                            <div className="flex items-center justify-end gap-2">
-                              <button
-                                onClick={() => openEditPersonaModal(persona)}
-                                className="p-2 rounded hover:bg-muted transition-colors"
-                                title="Edit"
-                              >
-                                <Edit2 className="h-4 w-4" />
-                              </button>
-                              <button
-                                onClick={() => handleDeletePersona(persona.id)}
-                                className="p-2 rounded hover:bg-red-500/10 text-muted-foreground hover:text-red-500 transition-colors"
-                                title="Delete"
-                              >
-                                <Trash2 className="h-4 w-4" />
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </motion.div>
-          )}
-
-          {activeTab === "pages" && (
-            <motion.div
-              key="pages"
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-            >
-              <div className="flex items-center justify-between mb-4">
-                <div>
-                  <h2 className="text-lg font-semibold">Pages</h2>
-                  <p className="text-sm text-muted-foreground">
-                    URL mappings that can be referenced in test cases using{" "}
-                    <code className="bg-muted px-1 py-0.5 rounded text-xs">
-                      {"{{pagename}}"}
-                    </code>
-                  </p>
-                </div>
-                <button
-                  onClick={openCreatePageModal}
-                  className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors"
-                >
-                  <Plus className="h-4 w-4" />
-                  Add Page
-                </button>
-              </div>
-
-              {pages.length === 0 ? (
-                <div className="text-center py-12 border border-dashed border-border rounded-lg">
-                  <FileText className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
-                  <h3 className="text-lg font-medium mb-2">No pages yet</h3>
-                  <p className="text-muted-foreground mb-4">
-                    Add pages to create reusable URL references for your tests
-                  </p>
-                  <button
-                    onClick={openCreatePageModal}
-                    className="inline-flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors"
-                  >
-                    <Plus className="h-4 w-4" />
-                    Add Page
-                  </button>
-                </div>
-              ) : (
-                <div className="border border-border rounded-lg overflow-hidden">
-                  <table className="w-full">
-                    <thead className="bg-muted/50">
-                      <tr>
-                        <th className="text-left px-4 py-3 text-sm font-medium">Name</th>
-                        <th className="text-left px-4 py-3 text-sm font-medium">Path</th>
-                        <th className="text-left px-4 py-3 text-sm font-medium">Description</th>
-                        <th className="text-right px-4 py-3 text-sm font-medium">Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-border">
-                      {pages.map((page) => (
-                        <tr key={page.id} className="hover:bg-muted/30">
-                          <td className="px-4 py-3">
-                            <span className="font-mono text-sm bg-muted px-2 py-0.5 rounded">
-                              {page.name}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3 font-mono text-sm">{page.path}</td>
-                          <td className="px-4 py-3 text-sm text-muted-foreground">
-                            {page.description || "-"}
-                          </td>
-                          <td className="px-4 py-3 text-right">
-                            <div className="flex items-center justify-end gap-2">
-                              <button
-                                onClick={() => openEditPageModal(page)}
-                                className="p-2 rounded hover:bg-muted transition-colors"
-                                title="Edit"
-                              >
-                                <Edit2 className="h-4 w-4" />
-                              </button>
-                              <button
-                                onClick={() => handleDeletePage(page.id)}
-                                className="p-2 rounded hover:bg-red-500/10 text-muted-foreground hover:text-red-500 transition-colors"
-                                title="Delete"
-                              >
-                                <Trash2 className="h-4 w-4" />
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </motion.div>
-          )}
-
-          {activeTab === "fixtures" && (
-            <FixturesTab projectId={projectId} />
           )}
 
           {activeTab === "notifications" && (
@@ -1709,6 +1261,12 @@ Examples:
               )}
             </motion.div>
           )}
+
+          {activeTab === "environments" && (
+            <EnvironmentsTab projectId={parseInt(projectId, 10)} />
+          )}
+
+
         </AnimatePresence>
       </main>
 
@@ -1725,9 +1283,7 @@ Examples:
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-lg font-semibold">
                   {modalMode === "create" ? "Add" : "Edit"}{" "}
-                  {activeTab === "personas" ? "Persona" :
-                   activeTab === "pages" ? "Page" :
-                   activeTab === "notifications" ? "Notification Channel" : "Schedule"}
+                  {activeTab === "notifications" ? "Notification Channel" : "Schedule"}
                 </h3>
                 <button
                   onClick={() => setShowModal(false)}
@@ -1736,151 +1292,6 @@ Examples:
                   <X className="h-4 w-4" />
                 </button>
               </div>
-
-              {activeTab === "personas" && (
-                <div className="space-y-4">
-                  <div>
-                    <label className="block text-sm font-medium mb-1">
-                      Name <span className="text-red-500">*</span>
-                    </label>
-                    <input
-                      type="text"
-                      value={personaForm.name}
-                      onChange={(e) =>
-                        setPersonaForm({ ...personaForm, name: e.target.value })
-                      }
-                      placeholder="e.g., admin, test_user"
-                      className="w-full px-3 py-2 rounded-lg border border-border bg-background focus:outline-none focus:ring-2 focus:ring-primary"
-                    />
-                    <p className="text-xs text-muted-foreground mt-1">
-                      Use this name in test steps:{" "}
-                      <code className="bg-muted px-1 rounded">
-                        {`{{${personaForm.name || "name"}.username}}`}
-                      </code>
-                    </p>
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium mb-1">
-                      Username <span className="text-red-500">*</span>
-                    </label>
-                    <input
-                      type="text"
-                      value={personaForm.username}
-                      onChange={(e) =>
-                        setPersonaForm({ ...personaForm, username: e.target.value })
-                      }
-                      placeholder="e.g., admin@example.com"
-                      className="w-full px-3 py-2 rounded-lg border border-border bg-background focus:outline-none focus:ring-2 focus:ring-primary"
-                    />
-                  </div>
-                  {modalMode === "edit" && (
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="checkbox"
-                        id="changePassword"
-                        checked={changePassword}
-                        onChange={(e) => setChangePassword(e.target.checked)}
-                        className="rounded"
-                      />
-                      <label htmlFor="changePassword" className="text-sm">
-                        Change password
-                      </label>
-                    </div>
-                  )}
-                  {(modalMode === "create" || changePassword) && (
-                    <div>
-                      <label className="block text-sm font-medium mb-1">
-                        Password <span className="text-red-500">*</span>
-                      </label>
-                      <div className="relative">
-                        <input
-                          type={showPassword ? "text" : "password"}
-                          value={personaForm.password}
-                          onChange={(e) =>
-                            setPersonaForm({ ...personaForm, password: e.target.value })
-                          }
-                          placeholder="Enter password"
-                          className="w-full px-3 py-2 rounded-lg border border-border bg-background focus:outline-none focus:ring-2 focus:ring-primary pr-10"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => setShowPassword(!showPassword)}
-                          className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                        >
-                          {showPassword ? (
-                            <EyeOff className="h-4 w-4" />
-                          ) : (
-                            <Eye className="h-4 w-4" />
-                          )}
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                  <div>
-                    <label className="block text-sm font-medium mb-1">Description</label>
-                    <input
-                      type="text"
-                      value={personaForm.description}
-                      onChange={(e) =>
-                        setPersonaForm({ ...personaForm, description: e.target.value })
-                      }
-                      placeholder="Optional description"
-                      className="w-full px-3 py-2 rounded-lg border border-border bg-background focus:outline-none focus:ring-2 focus:ring-primary"
-                    />
-                  </div>
-                </div>
-              )}
-
-              {activeTab === "pages" && (
-                <div className="space-y-4">
-                  <div>
-                    <label className="block text-sm font-medium mb-1">
-                      Name <span className="text-red-500">*</span>
-                    </label>
-                    <input
-                      type="text"
-                      value={pageForm.name}
-                      onChange={(e) =>
-                        setPageForm({ ...pageForm, name: e.target.value })
-                      }
-                      placeholder="e.g., login, dashboard"
-                      className="w-full px-3 py-2 rounded-lg border border-border bg-background focus:outline-none focus:ring-2 focus:ring-primary"
-                    />
-                    <p className="text-xs text-muted-foreground mt-1">
-                      Use this name in test steps:{" "}
-                      <code className="bg-muted px-1 rounded">
-                        {`{{${pageForm.name || "name"}}}`}
-                      </code>
-                    </p>
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium mb-1">
-                      Path <span className="text-red-500">*</span>
-                    </label>
-                    <input
-                      type="text"
-                      value={pageForm.path}
-                      onChange={(e) =>
-                        setPageForm({ ...pageForm, path: e.target.value })
-                      }
-                      placeholder="e.g., /login, /dashboard"
-                      className="w-full px-3 py-2 rounded-lg border border-border bg-background focus:outline-none focus:ring-2 focus:ring-primary"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium mb-1">Description</label>
-                    <input
-                      type="text"
-                      value={pageForm.description}
-                      onChange={(e) =>
-                        setPageForm({ ...pageForm, description: e.target.value })
-                      }
-                      placeholder="Optional description"
-                      className="w-full px-3 py-2 rounded-lg border border-border bg-background focus:outline-none focus:ring-2 focus:ring-primary"
-                    />
-                  </div>
-                </div>
-              )}
 
               {activeTab === "notifications" && (
                 <div className="space-y-4">
@@ -2240,8 +1651,6 @@ Examples:
                 </button>
                 <button
                   onClick={
-                    activeTab === "personas" ? handleSavePersona :
-                    activeTab === "pages" ? handleSavePage :
                     activeTab === "notifications" ? handleSaveNotification :
                     handleSaveSchedule
                   }
