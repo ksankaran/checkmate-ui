@@ -40,3 +40,15 @@ export type {
 } from "./folder";
 
 export { parseSmartCriteria } from "./folder";
+
+export type {
+  Credential,
+  CredentialCreate,
+  CredentialUpdate,
+  CredentialType,
+  TestDataEntry,
+  TestDataCreate,
+  TestDataUpdate,
+  RevealedCredential,
+  CredentialSuggestion,
+} from "./vault";
