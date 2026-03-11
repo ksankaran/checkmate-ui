@@ -12,6 +12,7 @@ import {
   Loader2,
   ExternalLink,
   Monitor,
+  AlertTriangle,
 } from "lucide-react";
 import { ThemeToggle } from "@/components/dashboard/ThemeToggle";
 import { cn } from "@/lib/utils";
@@ -75,6 +76,9 @@ export default function RecordPage() {
   // Steps (editable copies of recorded steps)
   const [editableSteps, setEditableSteps] = useState<EditableStep[]>([]);
 
+  // Capability check
+  const [recordingAvailable, setRecordingAvailable] = useState<boolean | null>(null);
+
   // Save state
   const [isSaving, setIsSaving] = useState(false);
   const [isRefining, setIsRefining] = useState(false);
@@ -101,6 +105,14 @@ export default function RecordPage() {
     }
     fetchProject();
   }, [projectId, activeEnv]);
+
+  // Check if recording is available (requires headed browser)
+  useEffect(() => {
+    recorderApi
+      .getCapabilities()
+      .then((caps) => setRecordingAvailable(caps.recording_available))
+      .catch(() => setRecordingAvailable(false));
+  }, []);
 
   // Convert raw steps from WebSocket into editable steps
   useEffect(() => {
@@ -359,6 +371,34 @@ export default function RecordPage() {
         {/* Left Panel: Recording Controls + Status */}
         <div className="flex-1 overflow-y-auto p-6">
           <div className="max-w-2xl mx-auto space-y-6">
+            {/* Recording unavailable banner */}
+            {recordingAvailable === false && (
+              <motion.div
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="rounded-lg border border-amber-500/30 bg-amber-50/50 dark:bg-amber-950/20 p-5"
+              >
+                <div className="flex gap-3">
+                  <AlertTriangle className="h-5 w-5 text-amber-500 shrink-0 mt-0.5" />
+                  <div>
+                    <h3 className="font-medium text-amber-800 dark:text-amber-300">
+                      Recording not available
+                    </h3>
+                    <p className="text-sm text-amber-700/80 dark:text-amber-400/70 mt-1">
+                      Recording requires a headed (non-headless) browser to capture your
+                      interactions. This environment only has headless browsers available,
+                      which is typical for Kubernetes or CI/CD deployments.
+                    </p>
+                    <p className="text-sm text-amber-700/80 dark:text-amber-400/70 mt-2">
+                      To use recording, run Checkmate in an environment with a display
+                      server (e.g. local development), or configure a headed browser in
+                      the executor&apos;s <code className="text-xs bg-amber-200/50 dark:bg-amber-900/50 px-1 py-0.5 rounded">AVAILABLE_BROWSERS</code> setting.
+                    </p>
+                  </div>
+                </div>
+              </motion.div>
+            )}
+
             {/* URL Bar + Controls */}
             <motion.div
               initial={{ opacity: 0, y: 10 }}
@@ -409,6 +449,7 @@ export default function RecordPage() {
                     isStopping={isStopping}
                     isPaused={isPaused}
                     hasSteps={editableSteps.length > 0}
+                    disabled={recordingAvailable === false}
                     onStart={handleStart}
                     onStop={handleStop}
                     onPause={pause}

@@ -9,6 +9,7 @@ interface RecordingControlsProps {
   isStopping: boolean;
   isPaused: boolean;
   hasSteps: boolean;
+  disabled?: boolean;
   onStart: () => void;
   onStop: () => void;
   onPause: () => void;
@@ -22,6 +23,7 @@ export function RecordingControls({
   isStopping,
   isPaused,
   hasSteps,
+  disabled,
   onStart,
   onStop,
   onPause,
@@ -34,7 +36,7 @@ export function RecordingControls({
         /* Not recording — show Record button */
         <button
           onClick={onStart}
-          disabled={isStarting}
+          disabled={isStarting || disabled}
           className={cn(
             "flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors",
             "bg-red-500 text-white hover:bg-red-600",

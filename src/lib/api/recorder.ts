@@ -8,7 +8,14 @@ import type {
   RefineStepsResult,
 } from "@/types/recorder";
 
+export interface ExecutorCapabilities {
+  recording_available: boolean;
+  headed_browsers: string[];
+}
+
 export const recorderApi = {
+  getCapabilities: () => get<ExecutorCapabilities>("/api/executor/capabilities"),
+
   startSession: (projectId: number, config: RecordConfig) =>
     post<RecordSession>(`/api/projects/${projectId}/recorder/start`, config),
 
