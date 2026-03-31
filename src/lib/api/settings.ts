@@ -73,6 +73,7 @@ export interface ScheduleEntry {
 export interface Features {
   intelligent_retry: boolean;
   multiple_environments: boolean;
+  remotes_configured: boolean;
 }
 
 export const settingsApi = {

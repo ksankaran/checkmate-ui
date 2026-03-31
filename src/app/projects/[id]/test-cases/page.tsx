@@ -18,6 +18,7 @@ import {
   Folder,
   InboxIcon,
   X,
+  Upload,
   Settings,
   ChevronDown,
   ChevronUp,
@@ -61,6 +62,7 @@ import { FolderTree, type FolderSelection } from "@/components/folders/FolderTre
 import { FolderDialog } from "@/components/folders/FolderDialog";
 import { MoveToFolderDialog } from "@/components/folders/MoveToFolderDialog";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
+import { PromoteDialog } from "@/components/promote/PromoteDialog";
 import { Checkbox } from "@/components/ui/checkbox";
 import { parseTags, parseSteps, parseSmartCriteria } from "@/types";
 import { ACTION_LABELS } from "@/lib/constants";
@@ -124,7 +126,8 @@ export default function ScenariosPage() {
 
   // Run settings panel
   const [showRunSettings, setShowRunSettings] = useState(false);
-  const [features, setFeatures] = useState<Features>({ intelligent_retry: false });
+  const [features, setFeatures] = useState<Features>({ intelligent_retry: false, remotes_configured: false });
+  const [promoteOpen, setPromoteOpen] = useState(false);
   const [retryEnabled, setRetryEnabled] = useState(false);
   const [maxRetries, setMaxRetries] = useState(2);
   const [retryMode, setRetryMode] = useState<"simple" | "intelligent">("simple");
@@ -870,6 +873,18 @@ export default function ScenariosPage() {
                 </Button>
               )}
 
+              {/* Promote Selected button — appears when remotes configured and checkboxes ticked */}
+              {selectedIds.size > 0 && features.remotes_configured && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setPromoteOpen(true)}
+                >
+                  <Upload className="h-4 w-4 mr-2" />
+                  Promote ({selectedIds.size})
+                </Button>
+              )}
+
               <Button
                 size="sm"
                 variant={batchRunning ? "destructive" : "default"}
@@ -1448,6 +1463,16 @@ export default function ScenariosPage() {
         folders={folders}
         currentFolderId={movingTestCase?.folder_id ?? null}
         onMove={handleMoveTestCase}
+      />
+
+      {/* Promote Dialog */}
+      <PromoteDialog
+        open={promoteOpen}
+        onOpenChange={setPromoteOpen}
+        testCaseIds={Array.from(selectedIds)}
+        testCases={testCases.filter((tc) => selectedIds.has(tc.id))}
+        projectId={projectIdNum}
+        projectName={project?.name || ""}
       />
 
       {/* Delete Folder Confirmation */}

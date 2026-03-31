@@ -13,6 +13,7 @@ export const API_URL = (typeof window !== 'undefined' && window.__ENV?.API_URL) 
 // Feature flags from backend
 export interface Features {
   intelligent_retry: boolean;
+  remotes_configured?: boolean;
 }
 
 let featuresCache: Features | null = null;
@@ -31,5 +32,5 @@ export async function getFeatures(): Promise<Features> {
     console.error("Failed to fetch features:", error);
   }
   // Default to disabled if fetch fails
-  return { intelligent_retry: false };
+  return { intelligent_retry: false, remotes_configured: false };
 }
